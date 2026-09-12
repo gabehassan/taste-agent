@@ -8,7 +8,7 @@ export default async function Memory() {
   const m = await userApi("/v1/me/memory");
   return (
     <UserShell name={m0.user.name || ""}>
-      <Fade><h1 className="display text-4xl pt-6">memory</h1></Fade>
+      <Fade><h1 className="display text-[28px] mb-10">memory</h1></Fade>
       <MemoryView m={m} />
     </UserShell>
   );

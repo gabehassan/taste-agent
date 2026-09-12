@@ -7,9 +7,9 @@ export async function me() {
 
 export default async function UserShell({ children, name }: { children: React.ReactNode; name: string }) {
   return (
-    <div className="min-h-screen grain">
+    <div className="min-h-screen">
       <Nav name={name} />
-      <main className="mx-auto max-w-5xl px-5 pb-24 pt-6">{children}</main>
+      <main className="mx-auto max-w-[1400px] px-6 pb-32 pt-8">{children}</main>
     </div>
   );
 }

@@ -114,7 +114,7 @@ def pick_item(user, exclude_id=None):
 
 def format_surface(item):
     snippets = item["snippets"]
-    snippet = snippets[item["surfaced_count"] % len(snippets)]
+    snippet = snippets[item["surfaced_count"] % len(snippets)].strip().strip('“”"\'‘’')
     from .prompts import surface_format
     by = f" by {item['author']}" if item.get("author") else ""
     src = item.get("source") or item["kind"]

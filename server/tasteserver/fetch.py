@@ -108,7 +108,7 @@ def _tweet(url):
         kind="tweet", url=t.get("url", url), title=(t.get("text", "")[:80]).replace("\n", " "),
         author=f"{author.get('name', '')} (@{author.get('screen_name', '')})", text="\n".join(parts), source="x.com",
         meta={"likes": t.get("likes"), "replies": t.get("replies"), "created_at": t.get("created_at"),
-              "photos": [p.get("url") for p in photos][:4]},
+              "photos": [p.get("url") for p in photos][:4], "author_avatar": author.get("avatar_url")},
         media_url=url if videos else "",
         thumbnail=(photos[0].get("url") if photos else ""),
     )
@@ -208,7 +208,8 @@ def _ytdlp(url):
         kind=kind, url=info.get("webpage_url") or url, title=title, author=author, text="\n".join(parts),
         source=info.get("extractor_key", kind),
         meta={"duration": info.get("duration"), "views": info.get("view_count"), "likes": info.get("like_count"),
-              "has_captions": bool(transcript), "upload_date": info.get("upload_date")},
+              "has_captions": bool(transcript), "upload_date": info.get("upload_date"),
+              "author_avatar": next((t.get("url") for t in (info.get("thumbnails") or []) if str(t.get("id", "")).startswith("avatar")), None)},
         media_url=url if info.get("duration") else "", thumbnail=info.get("thumbnail") or "",
     )
 

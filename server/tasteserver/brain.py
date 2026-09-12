@@ -106,8 +106,8 @@ PROFILE_SYSTEM = "\n\n" + PR("profile") + "\n"
 
 
 def refresh_profile(user, job_id=None):
-    items = [i for i in db.list_items(user["id"], limit=250) if i["status"] != "pending"]
-    if not items:
+    items = [i for i in db.list_items(user["id"], limit=250) if i["status"] not in ("pending", "retrying") and "junk" not in (i["tags"] or [])]
+    if len(items) < 3:
         return None
     prev = db.latest_profile(user["id"])
     lines = []
@@ -194,13 +194,26 @@ def _brief(items):
 CHAT_SYSTEM = "\n\n" + PR("chat") + "\n"
 
 
+def _progress_line(user):
+    try:
+        from .api import progress_for
+        pr = progress_for(user)
+        undone = [q["label"] for q in pr["quests"] if not q["done"]][:3]
+        return (f"you have known them for {pr['items']} saved things (level: {pr['title']}). "
+                f"things they have not done yet that would help you know them better: {'; '.join(undone) or 'nothing, they have done it all'}. "
+                "Mention at most one of these, only when it fits naturally, never as a checklist.")
+    except Exception:
+        return ""
+
+
 def chat(user, user_text, job_id=None):
     uid = user["id"]
     profile = db.latest_profile(uid)
     context = (f"<taste_profile>\n{profile['text'] if profile else '(none yet)'}\n</taste_profile>\n"
                f"<recent_items>\n{_brief(db.list_items(uid, limit=15))}\n</recent_items>\n"
                f"<last_thing_you_texted_them>\n{json.dumps(db.last_surface(uid), default=str)}\n</last_thing_you_texted_them>\n"
-               f"<now>{time.strftime('%A %Y-%m-%d %H:%M')}</now>")
+               f"<now>{time.strftime('%A %Y-%m-%d %H:%M')}</now>\n"
+               f"<relationship>{_progress_line(user)}</relationship>")
     inp = [{"role": "user", "content": [{"type": "input_text", "text": context}]}, {"role": "assistant", "content": "got it."}]
     for h in db.recent_chat(uid):
         inp.append({"role": h["role"], "content": h["content"]})

@@ -361,10 +361,17 @@ def add_connection(body: ConnectionBody, request: Request, p: Principal = Depend
     cfg = {k: str(body.config.get(k, "")).strip()[:300] for k in need}
     if any(not v for v in cfg.values()):
         raise HTTPException(400, f"config needs: {', '.join(need)}")
-    if body.type == "rss":
+    if body.type == "substack":
+        from .connections import substack_feed
+        cfg["url"] = substack_feed(cfg["url"])
+    if body.type in ("rss", "substack"):
         from .netguard import check_url
         check_url(cfg["url"])
-    if len(db.q("SELECT 1 FROM connections WHERE user_id = %s", (u["id"],))) >= 10:
+    if not CONNECTION_TYPES[body.type].get("multi") and db.q("SELECT 1 FROM connections WHERE user_id = %s AND type = %s", (u["id"], body.type)):
+        raise HTTPException(400, "already connected")
+    if db.q("SELECT 1 FROM connections WHERE user_id = %s AND type = %s AND config->>'url' = %s", (u["id"], body.type, cfg.get("url"))):
+        raise HTTPException(400, "already added")
+    if len(db.q("SELECT 1 FROM connections WHERE user_id = %s", (u["id"],))) >= 25:
         raise HTTPException(400, "too many connections")
     r = db.q("INSERT INTO connections(user_id, type, config) VALUES (%s, %s, %s) RETURNING *", (u["id"], body.type, db.J(cfg)), one=True)
     db.enqueue(u["id"], "sync_connection", {"connection_id": str(r["id"])})
@@ -419,6 +426,46 @@ def me_memory(request: Request, p: Principal = Depends(require("user"))):
             "about": {k: P[k]["about"].strip() for k in ("voice", "digest", "chat", "profile")},
         },
     }
+
+
+LEVELS = [(0, "stranger"), (5, "acquaintance"), (15, "friend"), (40, "close friend"), (100, "knows you")]
+
+
+def progress_for(u):
+    uid = u["id"]
+    n_items = db.count_items(uid)
+    kinds = db.q("SELECT COUNT(DISTINCT kind) AS n FROM items WHERE user_id = %s", (uid,), one=True)["n"]
+    notes = db.q("SELECT COUNT(*) AS n FROM items WHERE user_id = %s AND note IS NOT NULL AND note <> ''", (uid,), one=True)["n"]
+    reacts = db.q("SELECT COUNT(*) AS n FROM items WHERE user_id = %s AND meta ? 'reactions'", (uid,), one=True)["n"]
+    conns = db.q("SELECT type FROM connections WHERE user_id = %s AND status = 'active'", (uid,))
+    conn_types = {c["type"] for c in conns}
+    chats = db.q("SELECT COUNT(*) AS n FROM chat_turns WHERE user_id = %s AND role = 'user'", (uid,), one=True)["n"]
+    read = db.count_items(uid, "read")
+    profiles = db.q("SELECT COUNT(*) AS n FROM profiles WHERE user_id = %s", (uid,), one=True)["n"]
+    days = db.q("SELECT COUNT(DISTINCT date_trunc('day', created_at)) AS n FROM messages WHERE user_id = %s AND direction = 'in'", (uid,), one=True)["n"]
+    quests = [
+        {"id": "first_five", "label": "send five things", "done": n_items >= 5, "progress": min(n_items, 5), "of": 5, "unlocks": "your first taste profile"},
+        {"id": "mix", "label": "send three different kinds (an essay, a video, a tweet...)", "done": kinds >= 3, "progress": min(kinds, 3), "of": 3, "unlocks": "it stops guessing from one medium"},
+        {"id": "note", "label": "add a note to something you send (\"for the argument in part 2\")", "done": notes >= 1, "progress": min(notes, 1), "of": 1, "unlocks": "why-you-saved-it gets real"},
+        {"id": "react", "label": "tapback one of its texts", "done": reacts >= 1, "progress": min(reacts, 1), "of": 1, "unlocks": "it learns what lands"},
+        {"id": "talk", "label": "ask it what to read tonight", "done": chats >= 1, "progress": min(chats, 1), "of": 1, "unlocks": "recommendations from your own pile"},
+        {"id": "read", "label": "text 'read' after finishing something it sent", "done": read >= 1, "progress": min(read, 1), "of": 1, "unlocks": "it stops resurfacing things you've finished"},
+        {"id": "source", "label": "connect letterboxd, goodreads, or a substack", "done": len(conn_types) >= 1, "progress": min(len(conn_types), 1), "of": 1, "unlocks": "ratings: the only honest negative signal"},
+        {"id": "fifteen", "label": "fifteen things saved", "done": n_items >= 15, "progress": min(n_items, 15), "of": 15, "unlocks": "observations start showing up as random texts"},
+        {"id": "week", "label": "text it on five different days", "done": days >= 5, "progress": min(days, 5), "of": 5, "unlocks": "it can tell habits from moods"},
+        {"id": "forty", "label": "forty things saved", "done": n_items >= 40, "progress": min(n_items, 40), "of": 40, "unlocks": "it starts connecting things you haven't"},
+    ]
+    points = n_items + 3 * len(conn_types) + 2 * reacts + notes + min(chats, 20) + read + days * 2
+    level_i = max(i for i, (th, _) in enumerate(LEVELS) if n_items >= th)
+    nxt = LEVELS[level_i + 1] if level_i + 1 < len(LEVELS) else None
+    return {"level": level_i + 1, "title": LEVELS[level_i][1], "next": {"title": nxt[1], "at": nxt[0], "items": n_items} if nxt else None,
+            "points": points, "items": n_items, "profiles": profiles, "quests": quests,
+            "done": sum(q["done"] for q in quests), "total": len(quests)}
+
+
+@app.get("/v1/me/progress")
+def me_progress(request: Request, p: Principal = Depends(require("user"))):
+    return progress_for(target_user(request, p))
 
 
 # =============================================================================
@@ -711,6 +758,35 @@ def revoke_key(kid: str, p: Principal = Depends(require("admin"))):
     db.q("UPDATE api_keys SET revoked_at = now() WHERE id = %s", (kid,))
     db.audit(p.key_id, None, "key.revoke", {"id": kid})
     return {"ok": True}
+
+
+class ResetBody(BaseModel):
+    profile: bool = True
+    chat: bool = True
+    surfaces: bool = True
+    voice: bool = False
+    items: bool = False
+
+
+@app.post("/v1/admin/users/{uid}/reset")
+def admin_reset(uid: str, body: ResetBody, p: Principal = Depends(require("admin"))):
+    """Wipe parts of a user's memory. Items only when explicitly asked."""
+    if not db.get_user(uid):
+        raise HTTPException(404)
+    done = []
+    if body.profile:
+        db.q("DELETE FROM profiles WHERE user_id = %s", (uid,)); done.append("profile")
+    if body.chat:
+        db.q("DELETE FROM chat_turns WHERE user_id = %s", (uid,)); done.append("chat")
+    if body.surfaces:
+        db.q("DELETE FROM surfaces WHERE user_id = %s", (uid,)); db.q("UPDATE items SET surfaced_count = 0, last_surfaced_at = NULL WHERE user_id = %s", (uid,)); done.append("surfaces")
+    if body.voice:
+        db.q("UPDATE users SET state = state - 'voice' WHERE id = %s", (uid,)); done.append("voice")
+    if body.items:
+        db.q("DELETE FROM items WHERE user_id = %s", (uid,)); done.append("items")
+    db.q("UPDATE users SET state = (state - 'used_observations') || %s WHERE id = %s", (db.J({"items_since_profile": 0}), uid))
+    db.audit(p.key_id, uid, "user.reset", {"done": done})
+    return {"ok": True, "reset": done}
 
 
 @app.get("/v1/admin/usage")

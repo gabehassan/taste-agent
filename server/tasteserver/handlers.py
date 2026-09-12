@@ -83,6 +83,15 @@ def _bump_profile_counter(user_id):
     db.set_user_state(user_id, items_since_profile=(db.user_state(user_id).get("items_since_profile") or 0) + 1)
 
 
+def _clean_snippets(snips):
+    out = []
+    for x in snips or []:
+        x = (x or "").strip().strip('“”"\'‘’').strip()
+        if x:
+            out.append(x)
+    return out
+
+
 def ingest_url(user, url, note="", message_id=None, job_id=None):
     can = canonical(url)
     existing = db.find_by_url(user["id"], can) or db.find_by_url(user["id"], url)
@@ -109,7 +118,7 @@ def ingest_url(user, url, note="", message_id=None, job_id=None):
             pass
     d = brain.digest(user, ex, note=note, images=images, transcript=transcript, job_id=job_id)
     fields = dict(url=ex.url, canonical_url=can, kind=d.kind, source=ex.source, title=d.title or ex.title, author=ex.author,
-                  raw_text=ex.text, transcript=transcript or None, summary=d.summary, snippets=d.snippets, tags=d.tags,
+                  raw_text=ex.text, transcript=transcript or None, summary=d.summary, snippets=_clean_snippets(d.snippets), tags=d.tags,
                   why=d.why_saved, read_minutes=d.read_minutes, note=note or None, message_id=message_id, media=media_files,
                   meta={**ex.meta, "thumbnail": ex.thumbnail, "media_seconds": seconds}, status="unread")
     if existing:
@@ -128,7 +137,7 @@ def ingest_image(user, key, content_type, note="", message_id=None, job_id=None)
     ex = Extracted(kind="screenshot", url="", title=(note or "screenshot")[:80], text=note, source="screenshot")
     d = brain.digest(user, ex, note=note or "(screenshot, no caption)", images=[(content_type, data)], job_id=job_id)
     iid = db.add_item(user["id"], url=None, kind=d.kind, source="screenshot", title=d.title, raw_text=d.summary, summary=d.summary,
-                      snippets=d.snippets, tags=d.tags, why=d.why_saved, read_minutes=d.read_minutes, note=note or None,
+                      snippets=_clean_snippets(d.snippets), tags=d.tags, why=d.why_saved, read_minutes=d.read_minutes, note=note or None,
                       message_id=message_id, media=[{"key": key, "type": content_type}], meta={"thumbnail_key": key})
     _bump_profile_counter(user["id"])
     return db.get_item(user["id"], iid), d.ack, d.reaction

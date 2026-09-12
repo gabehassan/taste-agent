@@ -1,5 +1,5 @@
 import UserShell, { me } from "../user-shell";
-import { Fade, Stagger, Words } from "@/components/motion";
+import { Fade } from "@/components/motion";
 import { relTime, userApi } from "@/lib/user";
 import { rebuildProfile } from "../user-actions";
 
@@ -8,30 +8,26 @@ export default async function Taste() {
   const { profile, history } = await userApi("/v1/profile");
   return (
     <UserShell name={m.user.name || ""}>
-      <div className="pt-8">
-        <Fade><div className="u-kicker mb-3">your taste, as far as I can tell</div></Fade>
-        {!profile ? (
-          <Fade className="u-card p-8 u-muted">not enough yet. send me five or six things and I'll write you up.</Fade>
-        ) : (
-          <div className="grid md:grid-cols-[1fr_320px] gap-10">
+      <Fade>
+        {!profile ? <div className="u-muted py-16">not enough yet. send me five or six things and I'll write you up.</div> : (
+          <div className="grid md:grid-cols-[minmax(0,640px)_320px] gap-16">
             <div>
-              <h1 className="display text-4xl md:text-5xl leading-[1.08] mb-8"><Words text={profile.one_liner} /></h1>
-              <Stagger className="flex flex-col gap-6 text-[1.05rem] leading-relaxed max-w-2xl">
-                {profile.text.split(/\n\s*\n/).map((p: string, i: number) => <Fade key={i}><p>{p}</p></Fade>)}
-              </Stagger>
-              <Fade delay={0.4} className="u-faint text-xs mt-8">written {relTime(profile.created_at)} from {profile.item_count} things</Fade>
+              <div className="mono u-faint mb-4">taste · v{history.length} · {relTime(profile.created_at)} · from {profile.item_count} blocks</div>
+              <h1 className="display text-[28px] md:text-[34px] mb-10">{profile.one_liner}</h1>
+              <div className="flex flex-col gap-5 text-[16px] leading-relaxed">
+                {profile.text.split(/\n\s*\n/).map((p: string, i: number) => <p key={i}>{p}</p>)}
+              </div>
+              <form action={rebuildProfile} className="mt-10"><button className="u-btn soft">rethink me</button></form>
             </div>
-            <aside>
-              <Fade delay={0.2}><div className="u-kicker mb-3">things I've noticed</div></Fade>
-              <Stagger className="flex flex-col gap-3" gap={0.08}>
-                {profile.observations.map((o: string, i: number) => <Fade key={i} className="u-card p-4 u-quote text-base">{o}</Fade>)}
-              </Stagger>
-              <form action={rebuildProfile} className="mt-6"><button className="u-btn soft">rethink me</button></form>
-              {history.length > 1 && <div className="u-faint text-xs mt-4">{history.length} versions so far</div>}
+            <aside className="md:pt-10">
+              <div className="mono u-faint mb-3">observations</div>
+              <ol className="flex flex-col">
+                {profile.observations.map((o: string, i: number) => <li key={i} className="hair py-3 flex gap-4 text-sm"><span className="mono u-faint w-5 shrink-0">{String(i + 1).padStart(2, "0")}</span><span>{o}</span></li>)}
+              </ol>
             </aside>
           </div>
         )}
-      </div>
+      </Fade>
     </UserShell>
   );
 }

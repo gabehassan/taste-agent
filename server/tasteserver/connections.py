@@ -10,10 +10,25 @@ from . import db, netguard
 log = logging.getLogger("taste.connections")
 
 TYPES = {
-    "letterboxd": {"label": "Letterboxd", "config": ["username"]},
-    "goodreads": {"label": "Goodreads", "config": ["user_id"]},
-    "rss": {"label": "RSS feed", "config": ["url"]},
+    "letterboxd": {"label": "Letterboxd", "config": ["username"], "multi": False},
+    "goodreads": {"label": "Goodreads", "config": ["user_id"], "multi": False},
+    "substack": {"label": "Substack", "config": ["url"], "multi": True},
+    "rss": {"label": "RSS feed", "config": ["url"], "multi": True},
 }
+
+
+def substack_feed(x):
+    """'name', 'name.substack.com', 'https://name.substack.com/p/post', or a custom domain -> feed url."""
+    x = (x or "").strip().rstrip("/")
+    if not x:
+        return ""
+    if "." not in x and "/" not in x:
+        return f"https://{x}.substack.com/feed"
+    if not x.startswith("http"):
+        x = "https://" + x
+    from urllib.parse import urlparse
+    u = urlparse(x)
+    return f"{u.scheme}://{u.netloc}/feed"
 
 
 def sync(connection_id):
@@ -21,7 +36,7 @@ def sync(connection_id):
     if not c or c["status"] != "active":
         return
     try:
-        n = {"letterboxd": _letterboxd, "goodreads": _goodreads, "rss": _rss}[c["type"]](c)
+        n = {"letterboxd": _letterboxd, "goodreads": _goodreads, "rss": _rss, "substack": _substack}[c["type"]](c)
         db.q("UPDATE connections SET last_synced_at = now(), last_error = NULL WHERE id = %s", (c["id"],))
         log.info("connection %s (%s) synced %s new", c["id"], c["type"], n)
         if n:
@@ -97,4 +112,19 @@ def _rss(c):
             continue
         db.enqueue(c["user_id"], "ingest_url", {"url": link, "note": f"from feed {feed.feed.get('title', '')}", "notify": False})
         n += 1
+    return n
+
+
+def _substack(c):
+    feed = _feed(substack_feed(c["config"]["url"]))
+    title = feed.feed.get("title", "")
+    n = 0
+    for e in feed.entries[:20]:
+        link = e.get("link")
+        if not link or db.q("SELECT 1 FROM items WHERE user_id = %s AND canonical_url = %s", (c["user_id"], link)):
+            continue
+        db.enqueue(c["user_id"], "ingest_url", {"url": link, "note": f"from {title or 'a substack'} you read", "notify": False})
+        n += 1
+    if title and not c["config"].get("title"):
+        db.q("UPDATE connections SET config = config || %s WHERE id = %s", (db.J({"title": title}), c["id"]))
     return n
