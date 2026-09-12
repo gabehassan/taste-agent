@@ -12,3 +12,8 @@ wheels/
 data/
 __pycache__/
 *.log
+dashboard/.env.local
+dashboard/.vercel/
+dashboard/node_modules/
+dashboard/.next/
+server/.venv/

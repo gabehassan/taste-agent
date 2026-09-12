@@ -1,0 +1,14 @@
+@import "tailwindcss";
+:root { color-scheme: dark; }
+a { text-decoration: none; }
+table { border-collapse: collapse; }
+th { text-align: left; font-weight: 500; color: #a3a3a3; font-size: 12px; text-transform: uppercase; letter-spacing: .04em; padding: 6px 10px; border-bottom: 1px solid #262626; }
+td { padding: 8px 10px; border-bottom: 1px solid #1f1f1f; vertical-align: top; font-size: 14px; }
+input, select, textarea { background: #171717; border: 1px solid #333; border-radius: 6px; padding: 6px 10px; color: #fafafa; font-size: 14px; }
+button, .btn { background: #fafafa; color: #0a0a0a; border-radius: 6px; padding: 6px 12px; font-size: 14px; font-weight: 500; cursor: pointer; }
+button.ghost, .btn.ghost { background: #262626; color: #fafafa; }
+button.danger { background: #7f1d1d; color: #fee2e2; }
+.card { background: #111; border: 1px solid #262626; border-radius: 10px; padding: 16px; }
+.muted { color: #a3a3a3; }
+.tag { display: inline-block; background: #1f1f1f; border-radius: 999px; padding: 1px 8px; font-size: 12px; margin: 2px 4px 2px 0; }
+.pill { display: inline-block; border-radius: 999px; padding: 1px 8px; font-size: 12px; }
