@@ -4,7 +4,7 @@ An iMessage agent that learns what you like from what you send it.
 
 Text yourself (the "message to self" thread on iMessage) a link, a screenshot, a book title, or a stray thought. The agent reads it, files it, replies with the one interesting hook, and keeps a living profile of your taste. A few times a day it texts you a snippet from something you saved, or an observation about what you keep reaching for.
 
-Everything runs on this Mac. Messages are read from `~/Library/Messages/chat.db` and sent through Messages.app with AppleScript. Nothing goes to a third-party iMessage provider. Content and the taste profile go to the Claude API.
+Everything runs on this Mac. Messages are read from `~/Library/Messages/chat.db` and sent through Messages.app with AppleScript. Nothing goes to a third-party iMessage provider. Content and the taste profile go to OpenAI (gpt-5.6-luna).
 
 ## What it understands
 
@@ -54,7 +54,7 @@ data/           sqlite db + log (gitignored)
 Environment variables (put them in `.env`):
 
 - `TASTE_SELF_HANDLES` comma-separated handles that count as you (default `you@example.com`)
-- `TASTE_MODEL` default `claude-opus-5`
+- `TASTE_MODEL` default `gpt-5.6-luna` (OpenAI Responses API; `OPENAI_API_KEY` in `.env`)
 - `TASTE_SURFACES_PER_DAY` default 3, between `TASTE_WAKE_START` (10) and `TASTE_WAKE_END` (22) local time
 - `TASTE_MIN_GAP_MINUTES` default 90
 

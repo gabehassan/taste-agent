@@ -1,16 +1,15 @@
-"""All Claude calls live here."""
+"""All model calls live here. Runs on OpenAI's Responses API (gpt-5.6-luna by default)."""
 import base64
 import json
 import time
 
-import anthropic
+from openai import OpenAI
 from pydantic import BaseModel, Field
 
 from . import db
 from .config import MODEL
 
-client = anthropic.Anthropic()
-BETAS = ["server-side-fallback-2026-07-01"]
+client = OpenAI()
 
 VOICE = (
     "You are texting Gabe over iMessage. Write like a sharp friend, not an assistant: "
@@ -18,6 +17,22 @@ VOICE = (
     "no em dashes, no emoji unless he uses them first). Never explain what you are doing. "
     "Never say 'as an AI'. Talk to him like a peer."
 )
+
+
+def _parse(instructions, content, schema, effort="medium", max_output_tokens=4000):
+    resp = client.responses.parse(
+        model=MODEL,
+        instructions=instructions,
+        input=[{"role": "user", "content": content}],
+        text_format=schema,
+        reasoning={"effort": effort},
+        max_output_tokens=max_output_tokens,
+    )
+    out = resp.output_parsed
+    if out is None:
+        refusal = next((c.refusal for o in resp.output if o.type == "message" for c in o.content if c.type == "refusal"), None)
+        raise RuntimeError(f"no parsed output ({refusal or resp.status})")
+    return out
 
 
 # ---- digest a saved item ---------------------------------------------------
@@ -42,29 +57,21 @@ Gabe sends you things he wants to read, watch, or remember: articles, tweets, re
 def digest(extracted, note="", image=None):
     profile = db.latest_profile()
     profile_text = profile["text"] if profile else "(no taste profile yet, this is one of the first items)"
-    header = f"kind: {extracted.kind}\nurl: {extracted.url}\ntitle: {extracted.title}\nauthor: {extracted.author}\nsource: {extracted.source}\nmeta: {json.dumps(extracted.meta, default=str)}"
+    header = (f"kind: {extracted.kind}\nurl: {extracted.url}\ntitle: {extracted.title}\nauthor: {extracted.author}\n"
+              f"source: {extracted.source}\nmeta: {json.dumps(extracted.meta, default=str)}")
     if extracted.error:
         header += f"\nfetch error: {extracted.error}"
     body = extracted.text or "(no text could be extracted)"
     content = []
     if image:
         media, data = image
-        content.append({"type": "image", "source": {"type": "base64", "media_type": media,
-                                                     "data": base64.standard_b64encode(data).decode()}})
-    content.append({"type": "text", "text":
+        content.append({"type": "input_image", "detail": "auto",
+                        "image_url": f"data:{media};base64,{base64.standard_b64encode(data).decode()}"})
+    content.append({"type": "input_text", "text":
         f"<taste_profile>\n{profile_text}\n</taste_profile>\n\n"
         f"<gabe_note>{note or '(none)'}</gabe_note>\n\n"
         f"<item>\n{header}\n\n{body}\n</item>"})
-    resp = client.beta.messages.parse(
-        model=MODEL, max_tokens=4000, betas=BETAS, fallbacks="default",
-        thinking={"type": "adaptive"}, output_config={"effort": "medium"},
-        system=[{"type": "text", "text": DIGEST_SYSTEM, "cache_control": {"type": "ephemeral"}}],
-        messages=[{"role": "user", "content": content}],
-        output_format=Digest,
-    )
-    if resp.stop_reason == "refusal":
-        raise RuntimeError(f"refused: {resp.stop_details}")
-    return resp.parsed_output
+    return _parse(DIGEST_SYSTEM, content, Digest, effort="medium")
 
 
 # ---- taste profile ---------------------------------------------------------
@@ -83,6 +90,7 @@ You maintain a living profile of Gabe's taste, built only from what he has actua
 
 def refresh_profile():
     items = db.list_items(limit=200)
+    items = [i for i in items if i["status"] != "pending"]
     if not items:
         return None
     prev = db.latest_profile()
@@ -98,16 +106,7 @@ def refresh_profile():
         f"<previous_profile>\n{prev['text'] if prev else '(none yet)'}\n</previous_profile>\n\n"
         f"<saved_items count=\"{len(items)}\" newest_first=\"true\">\n" + "\n".join(lines) + "\n</saved_items>"
     )
-    resp = client.beta.messages.parse(
-        model=MODEL, max_tokens=6000, betas=BETAS, fallbacks="default",
-        thinking={"type": "adaptive"}, output_config={"effort": "high"},
-        system=PROFILE_SYSTEM,
-        messages=[{"role": "user", "content": prompt}],
-        output_format=Profile,
-    )
-    if resp.stop_reason == "refusal":
-        raise RuntimeError(f"refused: {resp.stop_details}")
-    p = resp.parsed_output
+    p = _parse(PROFILE_SYSTEM, [{"type": "input_text", "text": prompt}], Profile, effort="high", max_output_tokens=6000)
     db.save_profile(p.profile, p.observations, len(items))
     db.set_state("one_liner", p.one_liner)
     return p
@@ -116,16 +115,21 @@ def refresh_profile():
 # ---- free-form chat with tools --------------------------------------------
 
 TOOLS = [
-    {"name": "search_items", "description": "Search Gabe's saved items by keyword (title, summary, tags, full text, his notes).",
-     "input_schema": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}},
-    {"name": "list_recent", "description": "List the most recently saved items.",
-     "input_schema": {"type": "object", "properties": {"n": {"type": "integer"}, "status": {"type": "string", "description": "unread, read, or omit for all"}}}},
-    {"name": "get_item", "description": "Get one saved item in full, including its snippets and extracted text.",
-     "input_schema": {"type": "object", "properties": {"id": {"type": "integer"}}, "required": ["id"]}},
-    {"name": "mark_item", "description": "Change an item's status: read, unread, or archived.",
-     "input_schema": {"type": "object", "properties": {"id": {"type": "integer"}, "status": {"type": "string"}}, "required": ["id", "status"]}},
-    {"name": "save_note", "description": "Save something Gabe said as an item (a book he wants to read, a thought, a recommendation someone gave him). Use when his message is clearly something to remember rather than a question.",
-     "input_schema": {"type": "object", "properties": {"title": {"type": "string"}, "kind": {"type": "string", "description": "book, note, film, album, idea, other"}, "text": {"type": "string"}, "tags": {"type": "array", "items": {"type": "string"}}}, "required": ["title", "kind", "text"]}},
+    {"type": "function", "name": "search_items", "strict": False,
+     "description": "Search Gabe's saved items by keyword (title, summary, tags, full text, his notes).",
+     "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}},
+    {"type": "function", "name": "list_recent", "strict": False,
+     "description": "List the most recently saved items.",
+     "parameters": {"type": "object", "properties": {"n": {"type": "integer"}, "status": {"type": "string", "description": "unread, read, or omit for all"}}}},
+    {"type": "function", "name": "get_item", "strict": False,
+     "description": "Get one saved item in full, including its snippets and extracted text.",
+     "parameters": {"type": "object", "properties": {"id": {"type": "integer"}}, "required": ["id"]}},
+    {"type": "function", "name": "mark_item", "strict": False,
+     "description": "Change an item's status: read, unread, or archived.",
+     "parameters": {"type": "object", "properties": {"id": {"type": "integer"}, "status": {"type": "string"}}, "required": ["id", "status"]}},
+    {"type": "function", "name": "save_note", "strict": False,
+     "description": "Save something Gabe said as an item (a book he wants to read, a thought, a recommendation someone gave him). Use when his message is clearly something to remember rather than a question.",
+     "parameters": {"type": "object", "properties": {"title": {"type": "string"}, "kind": {"type": "string", "description": "book, note, film, album, idea, other"}, "text": {"type": "string"}, "tags": {"type": "array", "items": {"type": "string"}}}, "required": ["title", "kind", "text"]}},
 ]
 
 
@@ -183,32 +187,29 @@ def chat(user_text):
         f"<last_thing_you_texted_him>\n{json.dumps(last, default=str) if last else '(nothing yet)'}\n</last_thing_you_texted_him>\n"
         f"<now>{time.strftime('%A %Y-%m-%d %H:%M')}</now>"
     )
-    history = db.recent_chat()
-    messages = [{"role": h["role"], "content": h["content"]} for h in history]
-    messages.append({"role": "user", "content": user_text})
-    system = [{"type": "text", "text": CHAT_SYSTEM, "cache_control": {"type": "ephemeral"}},
-              {"type": "text", "text": context}]
+    inp = [{"role": "user", "content": [{"type": "input_text", "text": context}]},
+           {"role": "assistant", "content": "got it."}]
+    for h in db.recent_chat():
+        inp.append({"role": h["role"], "content": h["content"]})
+    inp.append({"role": "user", "content": user_text})
+
+    resp = client.responses.create(model=MODEL, instructions=CHAT_SYSTEM, input=inp, tools=TOOLS,
+                                   reasoning={"effort": "medium"}, max_output_tokens=2000)
     for _ in range(6):
-        resp = client.beta.messages.create(
-            model=MODEL, max_tokens=2000, betas=BETAS, fallbacks="default",
-            thinking={"type": "adaptive"}, output_config={"effort": "medium"},
-            system=system, tools=TOOLS, messages=messages,
-        )
-        if resp.stop_reason == "refusal":
-            return "can't help with that one"
-        messages.append({"role": "assistant", "content": resp.content})
-        if resp.stop_reason != "tool_use":
+        calls = [o for o in resp.output if o.type == "function_call"]
+        if not calls:
             break
-        results = []
-        for block in resp.content:
-            if block.type == "tool_use":
-                try:
-                    out = _run_tool(block.name, block.input)
-                    results.append({"type": "tool_result", "tool_use_id": block.id, "content": out})
-                except Exception as e:
-                    results.append({"type": "tool_result", "tool_use_id": block.id, "content": f"error: {e}", "is_error": True})
-        messages.append({"role": "user", "content": results})
-    text = " ".join(b.text for b in resp.content if b.type == "text").strip()
+        outputs = []
+        for c in calls:
+            try:
+                result = _run_tool(c.name, json.loads(c.arguments or "{}"))
+            except Exception as e:
+                result = f"error: {e}"
+            outputs.append({"type": "function_call_output", "call_id": c.call_id, "output": result})
+        resp = client.responses.create(model=MODEL, instructions=CHAT_SYSTEM, previous_response_id=resp.id,
+                                       input=outputs, tools=TOOLS, reasoning={"effort": "medium"},
+                                       max_output_tokens=2000)
+    text = (resp.output_text or "").strip()
     db.add_chat("user", user_text)
     db.add_chat("assistant", text or "(no reply)")
     return text

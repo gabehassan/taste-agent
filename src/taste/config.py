@@ -21,7 +21,7 @@ SELF_HANDLES = [
 ]
 SEND_TO = os.environ.get("TASTE_SEND_TO", SELF_HANDLES[0])
 
-MODEL = os.environ.get("TASTE_MODEL", "claude-opus-5")
+MODEL = os.environ.get("TASTE_MODEL", "gpt-5.6-luna")
 POLL_SECONDS = int(os.environ.get("TASTE_POLL_SECONDS", "5"))
 
 # Resurfacing schedule (local time).
