@@ -50,3 +50,7 @@ a { text-decoration: none; color: inherit; }
 .u-chip { display: inline-flex; align-items: center; background: var(--paper-2); border-radius: 999px; padding: 3px 10px; font-size: 12px; color: var(--ink-2); }
 .u-quote { font-family: var(--font-display), Georgia, serif; font-variation-settings: "opsz" 36, "SOFT" 60; font-size: 1.15rem; line-height: 1.45; }
 .grain::before { content: ""; position: fixed; inset: 0; pointer-events: none; opacity: .035; background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='160' height='160'%3E%3Cfilter id='n'%3E%3CfeTurbulence type='fractalNoise' baseFrequency='.9' numOctaves='2'/%3E%3C/filter%3E%3Crect width='100%25' height='100%25' filter='url(%23n)'/%3E%3C/svg%3E"); }
+
+.admin-root .u-card { background: var(--card); border-color: var(--line); box-shadow: none; }
+.admin-root .u-chip { background: #262626; color: #d4d4d4; }
+.admin-root .u-muted { color: var(--ink-2); } .admin-root .u-faint { color: var(--ink-3); }

@@ -96,7 +96,7 @@ save_note = "Save something they said as an item (a book they want to read, a th
 [copy]
 about = """
 Canned texts that are sent without a model call. Plain text, they land as iMessages.
-{url} in login_link = the dashboard login URL. {why} in spend_cap = which cap was hit.
+{code} in login_code = the 6-digit code. {why} in spend_cap = which cap was hit.
 """
 welcome = """
 hey. i'm taste.
@@ -111,7 +111,7 @@ send me links (articles, tweets, reddit, tiktok, youtube, goodreads), screenshot
 words i understand: taste, hit me, more, read, status, pause, resume, login. anything else and we just talk.
 """
 invite_only = "hey. i'm taste, and i'm invite only for now. if someone gave you a code, text it to me."
-login_link = "here's your link, good for 15 minutes:\n{url}"
+login_code = "your login code is {code}. it works for 10 minutes. (enter it on the taste site, or just keep texting me here)"
 already_saved = "you already sent me that one ({title}). want the best bit from it?"
 ingest_limit = "you've hit today's ingest limit. tomorrow."
 spend_cap = "saved, but i'm paused until tomorrow ({why})."

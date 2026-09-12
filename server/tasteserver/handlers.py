@@ -220,14 +220,15 @@ WELCOME = ("hey. i'm taste.\n\nsend me anything you want to read, watch, or reme
            "over time i learn what you actually like. say 'taste' whenever you want to see what i've figured out.")
 
 
-def do_login_link(user):
-    """Magic link over iMessage: the phone itself is the credential."""
+def do_login_link(user, phone=None):
+    """Passwordless login: a 6-digit code texted over iMessage. No links: hosted iMessage providers block URLs
+    in fresh conversations, and a code is nicer anyway."""
     import hashlib, secrets
-    from .config import DASHBOARD_URL
-    tok = secrets.token_urlsafe(24)
-    db.q("INSERT INTO login_tokens(token_hash, user_id, expires_at) VALUES (%s, %s, now() + interval '15 minutes')",
-         (hashlib.sha256(tok.encode()).hexdigest(), user["id"]))
-    return out(user, C("login_link", url=f"{DASHBOARD_URL}/auth?token={tok}"))
+    code = f"{secrets.randbelow(900000) + 100000}"
+    db.q("UPDATE login_tokens SET used_at = now() WHERE user_id = %s AND used_at IS NULL", (user["id"],))
+    db.q("INSERT INTO login_tokens(token_hash, user_id, phone, expires_at) VALUES (%s, %s, %s, now() + interval '10 minutes')",
+         (hashlib.sha256(code.encode()).hexdigest(), user["id"], phone))
+    return out(user, C("login_code", code=code))
 
 
 # ---- inbound dispatcher -----------------------------------------------------------------

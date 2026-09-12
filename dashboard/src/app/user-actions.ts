@@ -6,12 +6,18 @@ import { publicApi, setUserKey, userApi } from "@/lib/user";
 export async function requestLink(formData: FormData) {
   const phone = String(formData.get("phone") || "").trim();
   try { await publicApi("/v1/auth/request", { phone }); } catch { redirect("/login?e=slow"); }
-  redirect("/login?sent=1");
+  redirect(`/login?sent=1&phone=${encodeURIComponent(phone)}`);
 }
 
-export async function exchange(token: string) {
-  const r = await publicApi<{ key: string }>("/v1/auth/exchange", { token });
-  await setUserKey(r.key);
+export async function exchangeCode(formData: FormData) {
+  const phone = String(formData.get("phone") || "").trim();
+  const token = String(formData.get("code") || "").trim();
+  try {
+    const r = await publicApi<{ key: string }>("/v1/auth/exchange", { token, phone });
+    await setUserKey(r.key);
+  } catch {
+    redirect(`/login?sent=1&phone=${encodeURIComponent(phone)}&e=code`);
+  }
   redirect("/");
 }
 

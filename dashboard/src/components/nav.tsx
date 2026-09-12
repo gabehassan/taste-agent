@@ -3,7 +3,7 @@ import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { motion } from "motion/react";
 
-const NAV = [["/", "home"], ["/items", "library"], ["/taste", "taste"], ["/connections", "connections"], ["/settings", "settings"]];
+const NAV = [["/", "home"], ["/items", "library"], ["/taste", "taste"], ["/memory", "memory"], ["/connections", "connections"], ["/settings", "settings"]];
 
 export default function Nav({ name }: { name: string }) {
   const path = usePathname();

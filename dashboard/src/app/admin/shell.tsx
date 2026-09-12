@@ -3,7 +3,7 @@ import { api } from "@/lib/api";
 import { currentUserId } from "@/lib/session";
 import { pickUser } from "@/app/admin/actions";
 
-const NAV = [["/admin", "overview"], ["/admin/items", "items"], ["/admin/profile", "profile"], ["/admin/connections", "connections"], ["/admin/users", "users"], ["/admin/settings", "settings"], ["/admin/logs", "logs"]];
+const NAV = [["/admin", "overview"], ["/admin/items", "items"], ["/admin/profile", "profile"], ["/admin/memory", "memory"], ["/admin/connections", "connections"], ["/admin/users", "users"], ["/admin/settings", "settings"], ["/admin/logs", "logs"]];
 
 export default async function Shell({ children, title }: { children: React.ReactNode; title: string }) {
   const [{ users }, uid] = await Promise.all([api("/v1/admin/users"), currentUserId()]);

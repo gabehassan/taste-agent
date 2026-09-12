@@ -389,6 +389,38 @@ def delete_connection(cid: str, request: Request, p: Principal = Depends(require
     return {"ok": True}
 
 
+@app.get("/v1/me/memory")
+def me_memory(request: Request, p: Principal = Depends(require("user"))):
+    """Everything that shapes how the agent talks to this user: the learned voice, the taste profile,
+    recent conversation memory, what it has texted, reactions, schedule state, and the rendered prompts."""
+    from . import brain
+    from .prompts import P
+    u = target_user(request, p)
+    state = u.get("state") or {}
+    profile = db.latest_profile(u["id"])
+    voice_stats = state.get("voice") or {}
+    reactions = db.q("""SELECT (meta->>'reactions') AS r, id, title FROM items WHERE user_id = %s AND meta ? 'reactions' ORDER BY id DESC LIMIT 20""", (u["id"],))
+    tags = db.q("""SELECT t AS tag, COUNT(*) AS n FROM items, unnest(tags) AS t WHERE user_id = %s GROUP BY t ORDER BY n DESC, t LIMIT 30""", (u["id"],))
+    return {
+        "user": _clean(u),
+        "voice": {"stats": voice_stats, "sentence": brain.voice_desc(u), "rendered": brain.voice(u)},
+        "profile": _clean(profile),
+        "profile_history": db.q("SELECT id, created_at, item_count, one_liner FROM profiles WHERE user_id = %s ORDER BY id DESC LIMIT 10", (u["id"],)),
+        "chat_memory": db.recent_chat(u["id"], n=30, max_age_hours=72),
+        "recent_texts": db.q("SELECT id, direction, kind, text, status, meta, created_at FROM messages WHERE user_id = %s ORDER BY id DESC LIMIT 30", (u["id"],)),
+        "surfaces": db.q("SELECT * FROM surfaces WHERE user_id = %s ORDER BY id DESC LIMIT 15", (u["id"],)),
+        "reactions": [{"item_id": r["id"], "title": r["title"], "reactions": __import__("json").loads(r["r"] or "[]")} for r in reactions],
+        "tags": tags,
+        "schedule": {"plan": state.get("plan"), "settings": u.get("settings"), "items_since_profile": state.get("items_since_profile", 0),
+                     "used_observations": len(state.get("used_observations") or []), "cap_notified": state.get("cap_notified")},
+        "spend": {"today": db.spend(u["id"], 1), "month": db.spend(u["id"], 30)},
+        "prompts": {
+            "digest": brain.voice(u) + brain.DIGEST_SYSTEM, "chat": brain.voice(u) + brain.CHAT_SYSTEM, "profile": brain.voice(u) + brain.PROFILE_SYSTEM,
+            "about": {k: P[k]["about"].strip() for k in ("voice", "digest", "chat", "profile")},
+        },
+    }
+
+
 # =============================================================================
 # blooio webhook (hosted iMessage number) + onboarding
 # =============================================================================
@@ -512,22 +544,34 @@ def auth_request(body: AuthRequest, request: Request):
         u = db.get_user(h["user_id"])
         if u and u["status"] == "active":
             from .handlers import do_login_link
-            do_login_link(u)
+            do_login_link(u, phone=phone)
     return {"ok": True}
 
 
 class AuthExchange(BaseModel):
-    token: str
+    token: str                      # the 6-digit code
+    phone: Optional[str] = None     # required when logging in with a code
 
 
 @app.post("/v1/auth/exchange")
 def auth_exchange(body: AuthExchange, request: Request):
     ip = request.headers.get("x-forwarded-for", "").split(",")[0].strip() or "?"
-    ratelimit.hit(f"auth_x:{ip}", 20, 3600)
-    th = hashlib.sha256(body.token.encode()).hexdigest()
+    ratelimit.hit(f"auth_x:{ip}", 30, 3600)
+    code = body.token.strip().replace(" ", "")
+    th = hashlib.sha256(code.encode()).hexdigest()
+    phone = blooio.normalize(body.phone) if body.phone else None
+    if phone:
+        ratelimit.hit(f"auth_xp:{phone}", 10, 3600)
+        # burn attempts on the live code for this phone so 6 digits can't be brute forced
+        live = db.q("SELECT token_hash, attempts FROM login_tokens WHERE phone = %s AND used_at IS NULL AND expires_at > now() ORDER BY expires_at DESC LIMIT 1", (phone,), one=True)
+        if not live or live["attempts"] >= 5:
+            raise HTTPException(401, "invalid or expired code")
+        if live["token_hash"] != th:
+            db.q("UPDATE login_tokens SET attempts = attempts + 1 WHERE token_hash = %s", (live["token_hash"],))
+            raise HTTPException(401, "invalid or expired code")
     t = db.q("UPDATE login_tokens SET used_at = now() WHERE token_hash = %s AND used_at IS NULL AND expires_at > now() RETURNING user_id", (th,), one=True)
     if not t:
-        raise HTTPException(401, "invalid or expired link")
+        raise HTTPException(401, "invalid or expired code")
     raw, kid = auth.create_key(t["user_id"], "web session", ["user"], expires_days=30)
     db.audit(kid, t["user_id"], "auth.login", {"ip": ip})
     return {"key": raw, "user_id": str(t["user_id"]), "expires_days": 30}
