@@ -209,3 +209,40 @@ ALTER TABLE users ADD COLUMN IF NOT EXISTS transport TEXT NOT NULL DEFAULT 'mac'
 ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ;
 ALTER TABLE login_tokens ADD COLUMN IF NOT EXISTS attempts INT NOT NULL DEFAULT 0;
 ALTER TABLE login_tokens ADD COLUMN IF NOT EXISTS phone TEXT;
+
+-- Separate challenges allow the same six-digit code to recur without a PK collision.
+-- Legacy login_tokens are deliberately not accepted by the new exchange endpoint.
+CREATE TABLE IF NOT EXISTS login_challenges (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  phone TEXT NOT NULL,
+  code_hash TEXT NOT NULL,
+  attempts INT NOT NULL DEFAULT 0,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  expires_at TIMESTAMPTZ NOT NULL,
+  used_at TIMESTAMPTZ
+);
+CREATE INDEX IF NOT EXISTS login_challenges_phone ON login_challenges(phone, created_at DESC);
+
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS send_attempts INT NOT NULL DEFAULT 0;
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS send_after TIMESTAMPTZ NOT NULL DEFAULT now();
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS send_locked_at TIMESTAMPTZ;
+
+CREATE TABLE IF NOT EXISTS user_memories (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  text TEXT NOT NULL,
+  source TEXT NOT NULL DEFAULT 'user',
+  evidence TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE(user_id, text)
+);
+CREATE INDEX IF NOT EXISTS user_memories_owner ON user_memories(user_id, created_at DESC);
+CREATE TABLE IF NOT EXISTS item_events (
+  id BIGSERIAL PRIMARY KEY,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  item_id BIGINT NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS item_events_owner ON item_events(user_id, created_at DESC);

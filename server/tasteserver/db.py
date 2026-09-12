@@ -1,6 +1,7 @@
 import pathlib
 import time
 from contextlib import contextmanager
+from contextvars import ContextVar
 
 from psycopg.rows import dict_row
 from psycopg.types.json import Jsonb
@@ -10,6 +11,7 @@ from .config import DATABASE_URL, DEFAULT_SETTINGS
 
 pool = ConnectionPool(conninfo=DATABASE_URL, min_size=1, max_size=8, open=False,
                       kwargs={"row_factory": dict_row})
+_transaction = ContextVar("taste_transaction", default=None)
 
 
 def open_pool():
@@ -19,9 +21,25 @@ def open_pool():
 
 @contextmanager
 def conn():
+    active = _transaction.get()
+    if active is not None:
+        yield active
+        return
     open_pool()
     with pool.connection() as c:
         yield c
+
+
+@contextmanager
+def transaction():
+    """Make related q() calls commit together, including calls in helper modules."""
+    with conn() as c:
+        with c.transaction():
+            token = _transaction.set(c)
+            try:
+                yield c
+            finally:
+                _transaction.reset(token)
 
 
 def q(sql, params=None, one=False):

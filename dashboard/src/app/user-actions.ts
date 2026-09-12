@@ -1,11 +1,19 @@
 "use server";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
-import { publicApi, setUserKey, userApi } from "@/lib/user";
+import { ApiError, publicApi, setUserKey, userApi } from "@/lib/user";
 
 export async function requestLink(formData: FormData) {
   const phone = String(formData.get("phone") || "").trim();
-  try { await publicApi("/v1/auth/request", { phone }); } catch { redirect("/login?e=slow"); }
+  try { await publicApi("/v1/auth/request", { phone }); } catch (err) {
+    const e = err instanceof ApiError ? (err.status === 429 ? "slow" : err.status === 422 ? "phone" : "unavailable") : "unavailable";
+    redirect(`/login?e=${e}`);
+  }
+  redirect(`/login?sent=1&phone=${encodeURIComponent(phone)}`);
+}
+
+export async function enterExistingCode(formData: FormData) {
+  const phone = String(formData.get("phone") || "").trim();
   redirect(`/login?sent=1&phone=${encodeURIComponent(phone)}`);
 }
 
@@ -15,8 +23,9 @@ export async function exchangeCode(formData: FormData) {
   try {
     const r = await publicApi<{ key: string }>("/v1/auth/exchange", { token, phone });
     await setUserKey(r.key);
-  } catch {
-    redirect(`/login?sent=1&phone=${encodeURIComponent(phone)}&e=code`);
+  } catch (err) {
+    const e = err instanceof ApiError && err.status === 429 ? "slow" : "code";
+    redirect(`/login?sent=1&phone=${encodeURIComponent(phone)}&e=${e}`);
   }
   redirect("/");
 }
@@ -70,4 +79,26 @@ export async function surfaceNow() {
 export async function rebuildProfile() {
   await userApi("/v1/profile/refresh", { method: "POST" });
   revalidatePath("/taste");
+}
+
+export async function giveFeedback(_previous: { message: string; error: boolean }, formData: FormData) {
+  const action = String(formData.get("action"));
+  try {
+    await userApi(`/v1/items/${Number(formData.get("id"))}/feedback`, { method: "POST", body: JSON.stringify({ action }) });
+    revalidatePath("/"); revalidatePath("/items"); revalidatePath("/memory");
+    return { message: action === "finished" ? "a little less saved for later." : action === "later" ? "resting for a few days." : "got it. that one can go.", error: false };
+  } catch { return { message: "couldn't save that. try again.", error: true }; }
+}
+
+export async function rememberPreference(_previous: { message: string; error: boolean }, formData: FormData) {
+  try {
+    await userApi("/v1/me/memories", { method: "POST", body: JSON.stringify({ text: String(formData.get("text") || "") }) });
+    revalidatePath("/memory");
+    return { message: "I’ll keep that in mind.", error: false };
+  } catch { return { message: "couldn't save that memory. there’s room for 30 notes; you can remove an old one below.", error: true }; }
+}
+
+export async function forgetPreference(formData: FormData) {
+  await userApi(`/v1/me/memories/${encodeURIComponent(String(formData.get("id")))}`, { method: "DELETE" });
+  revalidatePath("/memory");
 }

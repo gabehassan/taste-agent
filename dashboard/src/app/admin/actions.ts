@@ -3,7 +3,7 @@ import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
 import { headers } from "next/headers";
 import { api } from "@/lib/api";
-import { clearSession, loginAllowed, passwordOk, setCurrentUserId, setSession } from "@/lib/session";
+import { clearSession, requireSession, loginAllowed, passwordOk, setCurrentUserId, setSession } from "@/lib/session";
 
 export async function login(formData: FormData) {
   const h = await headers();
@@ -115,4 +115,17 @@ export async function surfaceNow(formData: FormData) {
 export async function retryJob(formData: FormData) {
   await api(`/v1/admin/jobs/${formData.get("jid")}/retry`, { method: "POST" });
   revalidatePath("/admin/logs");
+}
+
+export async function createInviteAction(_previous: { token: string; error: string }, formData: FormData) {
+  await requireSession();
+  try {
+    const result = await api("/v1/admin/invites", { method: "POST", body: JSON.stringify({
+      email: formData.get("email") || null, role: "user", days: 7,
+    }) });
+    revalidatePath("/admin/users");
+    return { token: result.token as string, error: "" };
+  } catch {
+    return { token: "", error: "Couldn't create an invite. Try again." };
+  }
 }

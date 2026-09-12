@@ -1,88 +1,49 @@
 import Link from "next/link";
+import { redirect } from "next/navigation";
 import UserShell, { me } from "./user-shell";
-import Block, { Grid, clean } from "@/components/block";
-import Growth from "@/components/growth";
 import { Fade } from "@/components/motion";
-import { relTime, userApi } from "@/lib/user";
-import { surfaceNow } from "./user-actions";
+import TasteMark from "@/components/taste-mark";
+import DailyPicks, { type DailyPick } from "@/components/daily-picks";
+import { onboardingConfig, messageLink } from "@/lib/onboarding";
+import { userApi, userKey } from "@/lib/user";
 
-function greeting(tz: string) {
-  const h = Number(new Intl.DateTimeFormat("en-US", { hour: "numeric", hour12: false, timeZone: tz }).format(new Date()));
-  return h < 5 ? "still up" : h < 12 ? "morning" : h < 17 ? "afternoon" : h < 22 ? "evening" : "late";
-}
-const nice = (hhmm: string) => { const [h, m] = hhmm.split(":").map(Number); return `${((h + 11) % 12) + 1}${m ? ":" + String(m).padStart(2, "0") : ""}${h < 12 ? "am" : "pm"}`; };
-const hours = (min: number) => min < 60 ? `${min} minutes` : min < 120 ? "about an hour" : `about ${Math.round(min / 60)} hours`;
+type Today = { picks: DailyPick[]; finished_week: number; finished_total: number; available: number; memories: {id: string; text: string}[] };
 
 export default async function Home() {
+  if (!(await userKey())) redirect("/start");
   const m = await me();
-  const u = m.user;
-  const [{ items }, { surfaces }, mem, progress] = await Promise.all([userApi("/v1/items?limit=20"), userApi("/v1/surfaces?limit=2"), userApi("/v1/me/memory"), userApi("/v1/me/progress")]);
-  const channels = (mem.tags || []).slice(0, 8);
-  const pending = (m.plan?.slots || []).filter((s: any) => !s.done).map((s: any) => s.at.slice(11, 16));
-  const first = (u.name || "").split(" ")[0].toLowerCase();
-  const n = m.counts.items;
-
-  // one honest sentence about the state of things
-  const status = u.settings?.paused ? "I'm paused. say resume whenever."
-    : n === 0 ? "nothing here yet. text me anything you want to come back to."
-    : pending.length ? `I'll text you something around ${nice(pending[0])}.`
-    : "that's it from me today.";
-  const facts: string[] = [];
-  if (m.unread_minutes > 0) facts.push(`${hours(m.unread_minutes)} of reading waiting`);
-  if (m.streak_days >= 2) facts.push(`${m.streak_days} days in a row`);
-  if (m.counts.read > 0) facts.push(`${m.counts.read} finished`);
-
-  return (
-    <UserShell name={u.name || ""}>
-      <Fade>
-        <div className="mb-10 max-w-3xl">
-          <div className="u-muted text-[15px] mb-2">{greeting(u.tz)}{first ? `, ${first}` : ""}.</div>
-          <h1 className="display text-[26px] md:text-[32px]">{m.one_liner || (n === 0 ? "I don't know you yet." : n < 5 ? `I've read ${n} thing${n === 1 ? "" : "s"} you sent. a few more and I'll start to have opinions.` : "still working you out.")}</h1>
-          <p className="text-[15px] mt-4 u-muted">{status}{facts.length ? ` ${facts.join(" · ")}.` : ""}{n > 0 && !u.settings?.paused && <> <form action={surfaceNow} className="inline"><button className="underline underline-offset-4 hover:opacity-70">or send something now</button></form></>}</p>
-        </div>
-      </Fade>
-
-      <Fade delay={0.03}><Growth p={progress} /></Fade>
-
-      {m.forgotten && (
-        <Fade delay={0.05}>
-          <Link href={`/items/${m.forgotten.id}`} className="block hair py-4 mb-10 max-w-3xl group">
-            <div className="mono u-faint mb-1">you saved this {relTime(m.forgotten.created_at)} and haven't opened it</div>
-            <div className="text-[15px] group-hover:underline underline-offset-4">{m.forgotten.title}</div>
-          </Link>
-        </Fade>
-      )}
-
-      {surfaces.length > 0 && (
-        <Fade delay={0.06}>
-          <div className="mb-12 max-w-xl">
-            <div className="mono u-faint mb-3">last texts</div>
-            <div className="flex flex-col gap-1.5">
-              {surfaces.map((s: any) => (
-                <div key={s.id} className="flex justify-start"><div className="max-w-[85%] px-3.5 py-2 text-[15px] leading-snug" style={{ background: "var(--paper-2)", borderRadius: 18, borderBottomLeftRadius: 4 }}>{clean(s.text.split("\n")[0])}<span className="mono u-faint block mt-1">{relTime(s.created_at)}</span></div></div>
-              ))}
-            </div>
-          </div>
-        </Fade>
-      )}
-
-      {channels.length > 0 && (
-        <Fade delay={0.08}>
-          <div className="mb-8 flex flex-wrap gap-x-5 gap-y-1 text-sm">
-            <span className="u-faint">you keep coming back to</span>
-            {channels.map((c: any) => <Link key={c.tag} href={`/items?q=${encodeURIComponent(c.tag)}`} className="hover:underline underline-offset-4">{c.tag}</Link>)}
-          </div>
-        </Fade>
-      )}
-
-      <div className="hair pt-3">
-        <div className="flex items-baseline justify-between mb-5">
-          <span className="u-faint text-sm">latest</span>
-          <Link href="/items" className="text-sm u-muted hover:underline underline-offset-4">everything</Link>
-        </div>
-        {items.length === 0 ? <div className="u-muted py-16 text-center">nothing yet. text me a link.</div>
-          : <Grid>{items.map((it: any, i: number) => <Block key={it.id} it={it} rel={relTime(it.created_at)} index={i} />)}</Grid>}
-      </div>
-    </UserShell>
-  );
+  const contact = await onboardingConfig();
+  const today = await userApi<Today>("/v1/me/today");
+  const date = new Intl.DateTimeFormat("en-US", { weekday: "long", month: "long", day: "numeric", timeZone: m.user.tz || "UTC" }).format(new Date());
+  const first = (m.user.name || "").split(" ")[0];
+  const milestone = [1, 3, 7, 15, 30, 60, 100].find(n => n > today.finished_total) || Math.ceil((today.finished_total + 1) / 50) * 50;
+  return <UserShell name={m.user.name || ""}>
+    <Fade><section className="today-intro">
+      <div className="mono u-muted">{date.toLowerCase()} <span className="mx-2">·</span> a little room for curiosity</div>
+      <div className="intro-heading"><div>
+        <p className="u-muted mb-3">{first ? `hey, ${first.toLowerCase()}.` : "hey, you."}</p>
+        <h1 className="display">less collecting.<br /><span className="u-muted">more coming back.</span></h1>
+        <p className="intro-copy">{today.picks.length ? "a few things from your world, picked for a moment like this. start with one. the rest can wait." : "a place for the things that stay with you. send taste something you love, and we’ll find our way back to it."}</p>
+      </div><TasteMark /></div>
+    </section></Fade>
+    <Fade delay={0.05}>
+      <div className="section-label"><h2>on your mind, again</h2><span className="mono u-muted">{today.picks.length ? `${today.picks.length} small invitations` : "your first invitation"}</span></div>
+      {today.picks.length ? <DailyPicks picks={today.picks} /> : <div className="quiet-empty"><TasteMark small /><h3>nothing to catch up on.</h3><p>{m.counts.items ? "your collection is still here whenever you want it. finished and snoozed things can rest." : "text taste a link, a screenshot, or the thing you keep thinking about."}</p><Link href={m.counts.items ? "/items" : "/start"} className="u-btn inline-block mt-5">{m.counts.items ? "visit your collection" : "open Messages"}</Link></div>}
+    </Fade>
+    <Fade delay={0.1}><div className="today-bottom">
+      <section className="return-progress">
+        <div className="mono u-muted mb-5">a collection, lived in</div>
+        <div className="return-number">{today.finished_total}<span>things you came back to</span></div>
+        <div className="return-track" role="progressbar" aria-label="Finished items" aria-valuenow={today.finished_total} aria-valuemin={0} aria-valuemax={milestone}><span style={{width: `${Math.min(today.finished_total / milestone, 1) * 100}%`}} /></div>
+        <p className="text-xs u-muted mt-3">{today.finished_week ? `${today.finished_week} finished this week. a little more of your collection became part of your life.` : "no streaks to keep. just good things to make time for."}</p>
+      </section>
+      <section className="taste-note">
+        <div className="mono u-muted mb-5">a note from taste</div>
+        <p>{m.one_liner || "I’m still getting to know your world. tell me what caught your eye, and what didn’t. both help."}</p>
+        <Link href="/memory" className="text-xs underline underline-offset-4 mt-5 inline-block">what I’m remembering <span aria-hidden="true">↗</span></Link>
+      </section>
+    </div></Fade>
+    {contact?.phone && <section className="taste-conversation"><TasteMark small /><div><h2 className="display text-xl">leave with a thought.</h2><p className="u-muted text-sm mt-2">something clicked? something felt off? tell taste. that’s where it gets interesting.</p></div><a className="u-btn" href={messageLink(contact.phone)}>talk to taste ↗</a></section>}
+    <div className="today-footer"><span>your taste is allowed to change.</span><Link href="/items">everything you’ve kept <span aria-hidden="true">↗</span></Link></div>
+  </UserShell>;
 }

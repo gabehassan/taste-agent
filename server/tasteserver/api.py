@@ -1,4 +1,4 @@
-"""HTTP API. Every route except /health requires a bearer key."""
+"""HTTP API with scoped bearer auth, public login and signed messaging webhooks."""
 import base64
 import hashlib
 import logging
@@ -11,9 +11,10 @@ from typing import Optional
 from fastapi import Depends, FastAPI, HTTPException, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
+from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
-from . import auth, blooio, db, ratelimit, storage
+from . import auth, blooio, db, login, memory, ratelimit, storage
 from .auth import Principal, require, target_user
 from .config import DASHBOARD_ORIGIN, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS, MAX_BODY_BYTES
 from .connections import TYPES as CONNECTION_TYPES
@@ -278,6 +279,9 @@ def patch_item(item_id: int, body: ItemPatch, request: Request, p: Principal = D
     f = {k: v for k, v in body.model_dump().items() if v is not None}
     if "status" in f and f["status"] not in ("unread", "read", "archived"):
         raise HTTPException(400, "bad status")
+    if f.get("status") == "read":
+        memory.feedback(u["id"], item_id, "finished")
+        f.pop("status")
     if f:
         db.update_item(item_id, **f)
     return _clean(db.get_item(u["id"], item_id))
@@ -406,6 +410,38 @@ def delete_connection(cid: str, request: Request, p: Principal = Depends(require
     return {"ok": True}
 
 
+@app.get("/v1/me/today")
+def today(request: Request, p: Principal = Depends(require("user"))):
+    from .scheduler import _now
+    u = target_user(request, p)
+    return memory.daily(u["id"], _now(u).date().isoformat())
+
+
+class MemoryBody(BaseModel):
+    text: str = Field(min_length=1, max_length=500)
+
+
+@app.post("/v1/me/memories")
+def add_memory(body: MemoryBody, request: Request, p: Principal = Depends(require("user"))):
+    return memory.remember(target_user(request, p)["id"], body.text)
+
+
+@app.delete("/v1/me/memories/{memory_id}")
+def forget_memory(memory_id: uuid.UUID, request: Request, p: Principal = Depends(require("user"))):
+    uid = target_user(request, p)["id"]
+    db.q("DELETE FROM user_memories WHERE id=%s AND user_id=%s", (memory_id, uid))
+    return {"ok": True}
+
+
+class FeedbackBody(BaseModel):
+    action: str
+
+
+@app.post("/v1/items/{item_id}/feedback")
+def item_feedback(item_id: int, body: FeedbackBody, request: Request, p: Principal = Depends(require("user"))):
+    return memory.feedback(target_user(request, p)["id"], item_id, body.action)
+
+
 @app.get("/v1/me/memory")
 def me_memory(request: Request, p: Principal = Depends(require("user"))):
     """Everything that shapes how the agent talks to this user: the learned voice, the taste profile,
@@ -422,6 +458,7 @@ def me_memory(request: Request, p: Principal = Depends(require("user"))):
         "user": _clean(u),
         "voice": {"stats": voice_stats, "sentence": brain.voice_desc(u), "rendered": brain.voice(u)},
         "profile": _clean(profile),
+        "preferences": memory.memories(u["id"]),
         "profile_history": db.q("SELECT id, created_at, item_count, one_liner FROM profiles WHERE user_id = %s ORDER BY id DESC LIMIT 10", (u["id"],)),
         "chat_memory": db.recent_chat(u["id"], n=30, max_age_hours=72),
         "recent_texts": db.q("SELECT id, direction, kind, text, status, meta, created_at FROM messages WHERE user_id = %s ORDER BY id DESC LIMIT 30", (u["id"],)),
@@ -504,7 +541,7 @@ def _store_remote_attachments(uid, atts):
 def _onboard_unknown(ev):
     """Someone new texted the number. Invite-only unless open_signup is on."""
     sender, text = ev["sender"], (ev.get("text") or "").strip()
-    if not sender:
+    if not sender or ev["kind"] != "text":
         return
     if not ratelimit.check(f"unknown:{sender}", 5, 86400):
         return
@@ -514,16 +551,17 @@ def _onboard_unknown(ev):
         code = m.group(1)
     inv = None
     if code:
-        inv = db.q("SELECT * FROM invites WHERE token_hash = %s AND used_at IS NULL AND expires_at > now()", (hashlib.sha256(code.encode()).hexdigest(),), one=True)
+        inv = db.q("SELECT * FROM invites WHERE token_hash = %s AND used_at IS NULL AND expires_at > now() FOR UPDATE", (hashlib.sha256(code.encode()).hexdigest(),), one=True)
     if not inv and not db.setting("open_signup"):
         if ratelimit.check(f"unknown_reply:{sender}", 1, 86400):
-            blooio.send_text(sender, __import__("tasteserver.prompts", fromlist=["copy"]).copy("invite_only"))
+            blooio.send_text(sender, __import__("tasteserver.prompts", fromlist=["copy"]).copy("invite_only"), idempotency_key=f"invite-only:{sender}:{ev.get('event_id')}")
         return
     u = db.q("INSERT INTO users(name, email, role, transport, onboarded_at) VALUES (%s, %s, %s, 'blooio', now()) RETURNING *",
              (None, (inv or {}).get("email"), (inv or {}).get("role", "user")), one=True)
     db.q("INSERT INTO handles(user_id, kind, address, capabilities, last_seen_at) VALUES (%s, 'imessage', %s, %s, now())",
          (u["id"], sender, db.J(["react", "typing"])))
     if inv:
+        ev["text"] = text.replace(code, "", 1).strip()
         db.q("UPDATE invites SET used_at = now() WHERE id = %s", (inv["id"],))
     db.audit(None, u["id"], "user.onboard", {"via": "blooio", "invite": bool(inv)})
     from .handlers import WELCOME
@@ -538,22 +576,38 @@ async def blooio_webhook(request: Request):
         raise HTTPException(401, "bad signature")
     import json as _json
     evt = _json.loads(raw or b"{}")
-    eid = evt.get("id")
-    if eid:
-        if db.q("SELECT 1 FROM webhook_events WHERE id = %s", (eid,)):
-            return {"ok": True, "duplicate": True}
-        db.q("INSERT INTO webhook_events(id) VALUES (%s) ON CONFLICT DO NOTHING", (eid,))
+    return await run_in_threadpool(process_blooio_event, evt)
+
+
+def process_blooio_event(evt):
+    with db.transaction():
+        return _process_blooio_event(evt)
+
+
+def _process_blooio_event(evt):
     ev = blooio.parse_event(evt)
     if not ev:
         log.info("blooio event ignored: %s", evt.get("type"))
         return {"ok": True, "ignored": evt.get("type")}
+    if not ev["sender"]:
+        return {"ok": True, "ignored": "missing sender"}
+    # Serialize a sender's onboarding and make the event receipt, message, and job atomic.
+    db.q("SELECT pg_advisory_xact_lock(hashtextextended(%s, 0))", (ev["sender"],))
+    eid = evt.get("id") or ev.get("message_id")
+    if not eid:
+        raise HTTPException(422, "missing event id")
+    receipt = db.q("INSERT INTO webhook_events(id) VALUES (%s) ON CONFLICT DO NOTHING RETURNING id", (eid,), one=True)
+    if not receipt:
+        return {"ok": True, "duplicate": True}
     h = db.q("SELECT * FROM handles WHERE address = %s", (ev["sender"],), one=True)
     if not h:
         u = _onboard_unknown(ev)
         if not u:
             return {"ok": True, "unknown": True}
         h = db.q("SELECT * FROM handles WHERE address = %s", (ev["sender"],), one=True)
-        return {"ok": True, "onboarded": True}
+        # Preserve the first submission; only an invite token with no content ends here.
+        if not ev.get("text") and not ev.get("attachments"):
+            return {"ok": True, "onboarded": True}
     uid = h["user_id"]
     user = db.get_user(uid)
     if not user or user["status"] != "active":
@@ -583,55 +637,41 @@ async def blooio_webhook(request: Request):
 # user login over iMessage (magic link)
 # =============================================================================
 
+@app.get("/v1/public/config")
+def public_config():
+    return {"phone": blooio.NUMBER if blooio.enabled() else None,
+            "open_signup": bool(db.setting("open_signup"))}
+
+
 class AuthRequest(BaseModel):
-    phone: str
+    phone: str = Field(min_length=1, max_length=40)
 
 
 @app.post("/v1/auth/request")
 def auth_request(body: AuthRequest, request: Request):
-    """Public. Texts a login link to the phone if it belongs to a user. Never reveals whether it does."""
+    """Keep account existence private; the UI never promises a text was sent."""
     ip = request.headers.get("x-forwarded-for", "").split(",")[0].strip() or "?"
     ratelimit.hit(f"auth_ip:{ip}", 10, 3600)
-    phone = blooio.normalize(body.phone)
-    if not phone or len(phone) < 8:
-        return {"ok": True}
+    phone = login.phone_number(body.phone)
     ratelimit.hit(f"auth_phone:{phone}", 3, 3600)
     h = db.q("SELECT * FROM handles WHERE address = %s", (phone,), one=True)
     if h:
         u = db.get_user(h["user_id"])
         if u and u["status"] == "active":
-            from .handlers import do_login_link
-            do_login_link(u, phone=phone)
+            login.issue(u, phone=phone)
     return {"ok": True}
 
 
 class AuthExchange(BaseModel):
-    token: str                      # the 6-digit code
-    phone: Optional[str] = None     # required when logging in with a code
+    token: str = Field(min_length=1, max_length=20)
+    phone: str = Field(min_length=1, max_length=40)
 
 
 @app.post("/v1/auth/exchange")
 def auth_exchange(body: AuthExchange, request: Request):
     ip = request.headers.get("x-forwarded-for", "").split(",")[0].strip() or "?"
     ratelimit.hit(f"auth_x:{ip}", 30, 3600)
-    code = body.token.strip().replace(" ", "")
-    th = hashlib.sha256(code.encode()).hexdigest()
-    phone = blooio.normalize(body.phone) if body.phone else None
-    if phone:
-        ratelimit.hit(f"auth_xp:{phone}", 10, 3600)
-        # burn attempts on the live code for this phone so 6 digits can't be brute forced
-        live = db.q("SELECT token_hash, attempts FROM login_tokens WHERE phone = %s AND used_at IS NULL AND expires_at > now() ORDER BY expires_at DESC LIMIT 1", (phone,), one=True)
-        if not live or live["attempts"] >= 5:
-            raise HTTPException(401, "invalid or expired code")
-        if live["token_hash"] != th:
-            db.q("UPDATE login_tokens SET attempts = attempts + 1 WHERE token_hash = %s", (live["token_hash"],))
-            raise HTTPException(401, "invalid or expired code")
-    t = db.q("UPDATE login_tokens SET used_at = now() WHERE token_hash = %s AND used_at IS NULL AND expires_at > now() RETURNING user_id", (th,), one=True)
-    if not t:
-        raise HTTPException(401, "invalid or expired code")
-    raw, kid = auth.create_key(t["user_id"], "web session", ["user"], expires_days=30)
-    db.audit(kid, t["user_id"], "auth.login", {"ip": ip})
-    return {"key": raw, "user_id": str(t["user_id"]), "expires_days": 30}
+    return login.exchange(body.phone, body.token, ip)
 
 
 @app.post("/v1/auth/logout")

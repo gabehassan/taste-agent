@@ -4,7 +4,7 @@ import re
 import time
 import uuid
 
-from . import brain, db, media, ratelimit, storage
+from . import brain, db, media, memory, ratelimit, storage
 from .prompts import copy as C
 from .fetch import Extracted, canonical, extract
 
@@ -19,7 +19,7 @@ def out(user, text, reply_to=None):
     """Queue a text for the transport. Enforces the per-user outbound cap."""
     limit = int(db.setting("rate_outbound_per_hour"))
     if db.outbound_sends_last_hour(user["id"]) >= limit:
-        log.warning("outbound cap hit for user %s, dropping: %s", user["id"], text[:60])
+        log.warning("outbound cap hit for user %s", user["id"])
         return None
     return db.queue_outbound(user["id"], text)
 
@@ -151,6 +151,8 @@ CMD = {
     "profile": ("taste", "profile", "my taste", "what do i like", "whats my taste", "what's my taste"),
     "surface": ("surface", "hit me", "random", "another", "something", "gimme", "next"),
     "more": ("more",),
+    "later": ("later", "not now", "another day"),
+    "skip": ("skip", "not for me", "not interested"),
     "read": ("read", "done", "finished", "read it", "watched", "watched it"),
     "status": ("status", "stats"),
     "help": ("help", "?", "what can you do"),
@@ -230,14 +232,13 @@ WELCOME = ("hey. i'm taste.\n\nsend me anything you want to read, watch, or reme
 
 
 def do_login_link(user, phone=None):
-    """Passwordless login: a 6-digit code texted over iMessage. No links: hosted iMessage providers block URLs
-    in fresh conversations, and a code is nicer anyway."""
-    import hashlib, secrets
-    code = f"{secrets.randbelow(900000) + 100000}"
-    db.q("UPDATE login_tokens SET used_at = now() WHERE user_id = %s AND used_at IS NULL", (user["id"],))
-    db.q("INSERT INTO login_tokens(token_hash, user_id, phone, expires_at) VALUES (%s, %s, %s, now() + interval '10 minutes')",
-         (hashlib.sha256(code.encode()).hexdigest(), user["id"], phone))
-    return out(user, C("login_code", code=code))
+    from fastapi import HTTPException
+    from . import login
+    try:
+        return login.issue(user, phone)
+    except HTTPException:
+        return out(user, "couldn't send another code yet. wait a bit, then text login again.")
+
 
 
 # ---- inbound dispatcher -----------------------------------------------------------------
@@ -309,10 +310,16 @@ def handle_message(job):
         return do_surface(user)
     if cmd == "more":
         return do_more(user)
+    if cmd in {"later", "skip"}:
+        last = db.last_surface(user["id"])
+        if last and last.get("item_id"):
+            memory.feedback(user["id"], last["item_id"], "later" if cmd == "later" else "not_for_me")
+            return out(user, "another day, then." if cmd == "later" else "got it. i'll leave that one alone.")
+        return out(user, C("nothing_to_mark"))
     if cmd == "read":
         last = db.last_surface(user["id"])
         if last and last.get("item_id"):
-            db.update_item(last["item_id"], status="read")
+            memory.feedback(user["id"], last["item_id"], "finished")
             return react(user, msg, "like") or out(user, C("marked_read"))
         return out(user, C("nothing_to_mark"))
     if cmd == "status":
@@ -320,7 +327,8 @@ def handle_message(job):
     if cmd == "help":
         return out(user, HELP)
     if cmd == "login":
-        return do_login_link(user)
+        handle = db.q("SELECT address FROM handles WHERE id = %s", (msg.get("handle_id"),), one=True)
+        return do_login_link(user, phone=handle["address"] if handle else None)
     ok, why = db.spend_ok(user)
     if not ok:
         return
@@ -361,15 +369,41 @@ def surface_tick():
     from .scheduler import due_slot, mark_slot_done
     for user in db.q("SELECT * FROM users WHERE status = 'active'"):
         try:
-            i = due_slot(user)
-            if i is None:
-                continue
-            mark_slot_done(user, i)
-            if db.count_items(user["id"]) == 0:
-                continue
-            do_surface(user)
+            with db.transaction():
+                user = db.q("SELECT * FROM users WHERE id=%s FOR NO KEY UPDATE", (user["id"],), one=True)
+                i = due_slot(user)
+                if i is None:
+                    continue
+                mark_slot_done(user, i)
+            do_proactive(user)
         except Exception:
             log.exception("surface tick failed for %s", user["id"])
+
+
+def do_proactive(user):
+    from .scheduler import proactive_candidates
+    from .config import DASHBOARD_URL
+    candidates = proactive_candidates(user)
+    if not candidates or not db.spend_ok(user)[0]:
+        return None
+    choice = brain.proactive_choice(user, candidates)
+    item = next((i for i in candidates if i["id"] == choice.item_id), None)
+    if not choice.send or not item or not 0 <= choice.excerpt_index < min(4, len(item["snippets"])) or not choice.connection.strip():
+        return None
+    # The model picks an index; it never writes or rewrites the quotation.
+    quote = item["snippets"][choice.excerpt_index][:1000].strip().strip('“”"')
+    text = f"{choice.connection.strip()}\n\n“{quote}”\n— {item['title']}\n\n{DASHBOARD_URL.rstrip('/')}/items/{item['id']}"
+    with db.transaction():
+        fresh = db.q("SELECT * FROM items WHERE id=%s AND user_id=%s FOR UPDATE", (item["id"], user["id"]), one=True)
+        if not fresh or not memory.eligible(fresh):
+            return None
+        mid = out(user, text)
+        if mid is None:
+            return None
+        db.q("UPDATE messages SET meta=meta || %s WHERE id=%s", (db.J({"proactive": True, "item_id": item["id"], "reason": choice.reason}), mid))
+        db.update_item(item["id"], surfaced_count=fresh["surfaced_count"] + 1, last_surfaced_at=db.q("SELECT now() AS t", one=True)["t"])
+        db.log_surface(user["id"], item["id"], "proactive", text)
+        return mid
 
 
 def profile_tick():

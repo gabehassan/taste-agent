@@ -9,7 +9,7 @@ export default async function UserShell({ children, name }: { children: React.Re
   return (
     <div className="min-h-screen">
       <Nav name={name} />
-      <main className="mx-auto max-w-[1400px] px-6 pb-32 pt-8">{children}</main>
+      <main className="mx-auto max-w-[1160px] px-5 md:px-8 pb-24 pt-10">{children}</main>
     </div>
   );
 }

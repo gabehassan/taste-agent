@@ -1,3 +1,4 @@
+import InviteForm from "./invite-form";
 import Shell from "@/app/admin/shell";
 import { api, fmtDate, fmtMoney } from "@/lib/api";
 import { requireSession } from "@/lib/session";
@@ -9,6 +10,7 @@ export default async function Users({ searchParams }: { searchParams: Promise<{ 
   const { users } = await api("/v1/admin/users");
   return (
     <Shell title="users">
+      <InviteForm />
       {newkey && <div className="card mb-6 border-green-800"><div className="muted text-xs uppercase">new key (shown once, copy it now)</div><code className="block mt-1 break-all select-all">{newkey}</code></div>}
       <div className="flex flex-col gap-4 mb-8">
         {users.map((u: any) => (

@@ -1,26 +1,22 @@
 "use client";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
+import TasteMark from "./taste-mark";
 
-const NAV = [["/", "home"], ["/items", "everything"], ["/taste", "taste"], ["/memory", "memory"], ["/connections", "sources"], ["/settings", "settings"]];
+const NAV = [["/", "today"], ["/items", "collection"], ["/taste", "your taste"], ["/memory", "memory"], ["/connections", "sources"]];
 
 export default function Nav({ name }: { name: string }) {
   const path = usePathname();
-  return (
-    <header className="sticky top-0 z-20" style={{ background: "var(--paper)", borderBottom: "1px solid var(--line)" }}>
-      <div className="mx-auto max-w-[1400px] px-6 h-12 flex items-center gap-8">
-        <Link href="/" className="font-medium tracking-tight">taste</Link>
-        <nav className="flex gap-5 text-sm">
-          {NAV.map(([href, label]) => {
-            const active = href === "/" ? path === "/" : path.startsWith(href);
-            return <Link key={href} href={href} className="hover:opacity-100 transition-opacity" style={{ opacity: active ? 1 : 0.45, textDecoration: active ? "underline" : "none", textUnderlineOffset: 6 }}>{label}</Link>;
-          })}
-        </nav>
-        <div className="ml-auto flex items-center gap-4 text-sm">
-          <span className="u-muted">{name}</span>
-          <form action="/api/logout" method="post"><button className="u-faint hover:underline">log out</button></form>
-        </div>
-      </div>
-    </header>
-  );
+  return <header className="taste-nav">
+    <div className="taste-nav-inner">
+      <Link href="/" className="taste-wordmark"><TasteMark small />taste</Link>
+      <nav aria-label="Main navigation" className="taste-nav-links">
+        {NAV.map(([href, label]) => {
+          const active = href === "/" ? path === "/" : path.startsWith(href);
+          return <Link key={href} href={href} aria-current={active ? "page" : undefined}>{label}</Link>;
+        })}
+      </nav>
+      <Link href="/settings" className="taste-account" aria-label="Your settings">{name ? name.slice(0, 1).toUpperCase() : "you"}</Link>
+    </div>
+  </header>;
 }

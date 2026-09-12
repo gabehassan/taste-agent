@@ -1,5 +1,5 @@
 import "server-only";
-import { cookies } from "next/headers";
+import { cookies, headers } from "next/headers";
 import { redirect } from "next/navigation";
 
 const BASE = process.env.TASTE_API_URL!;
@@ -43,7 +43,9 @@ export async function userApi<T = any>(path: string, init: RequestInit = {}, key
 }
 
 export async function publicApi<T = any>(path: string, body: unknown): Promise<T> {
-  const res = await fetch(new URL(path, BASE), { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body), cache: "no-store" });
+  const incoming = await headers();
+  const ip = incoming.get("x-forwarded-for")?.split(",")[0].trim();
+  const res = await fetch(new URL(path, BASE), { method: "POST", headers: { "Content-Type": "application/json", ...(ip ? { "X-Forwarded-For": ip } : {}) }, body: JSON.stringify(body), cache: "no-store" });
   if (!res.ok) {
     let msg = res.statusText;
     try { msg = (await res.json()).detail ?? msg; } catch {}

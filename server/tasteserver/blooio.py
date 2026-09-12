@@ -5,6 +5,8 @@ import logging
 import os
 import re
 import time
+import datetime as dt
+from email.utils import parsedate_to_datetime
 from urllib.parse import quote
 
 import httpx
@@ -32,16 +34,41 @@ def normalize(phone):
     return p
 
 
-def send_text(to, text, reply_to=None, effect=None):
-    body = {"to": to, "from": NUMBER, "text": text}
+class SendError(RuntimeError):
+    def __init__(self, response):
+        self.status = response.status_code
+        try:
+            error = response.json().get("error") or {}
+            self.code = error.get("code", "") if isinstance(error, dict) else ""
+        except ValueError:
+            self.code = ""
+        self.retry_after = None
+        value = response.headers.get("retry-after")
+        if value:
+            try:
+                self.retry_after = max(1, int(value))
+            except ValueError:
+                try:
+                    self.retry_after = max(1, int((parsedate_to_datetime(value) - dt.datetime.now(dt.timezone.utc)).total_seconds()) + 1)
+                except (ValueError, TypeError, OverflowError):
+                    pass
+        # Conversation/safety limits require recipient or operator action, not blind retries.
+        self.retryable = self.status == 408 or self.status >= 500 or (
+            self.status == 429 and self.retry_after is not None
+            and self.code in {"rate_limit_exceeded", "rate_limited", "too_many_requests"})
+        super().__init__(f"blooio send {self.status}: {self.code or 'request failed'}")
+
+
+def send_text(to, text, reply_to=None, effect=None, idempotency_key=None, from_number=None):
+    body = {"to": to, "from": from_number or NUMBER, "text": text}
     if reply_to:
         body["reply_to"] = reply_to
     if effect:
         body["effect"] = effect
     with _c() as c:
-        r = c.post("/messages", json=body)
+        r = c.post("/messages", json=body, headers={"Idempotency-Key": idempotency_key} if idempotency_key else {})
     if r.status_code >= 300:
-        raise RuntimeError(f"blooio send {r.status_code}: {r.text[:200]}")
+        raise SendError(r)
     return r.json()  # id, chat_id, protocol
 
 

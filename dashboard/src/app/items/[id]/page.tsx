@@ -2,12 +2,14 @@ import UserShell, { me } from "../../user-shell";
 import { Fade } from "@/components/motion";
 import { clean, favicon, host } from "@/components/block";
 import { relTime, userApi } from "@/lib/user";
+import { onboardingConfig, messageLink } from "@/lib/onboarding";
 import { setStatus } from "../../user-actions";
 
 export default async function ItemPage({ params }: { params: Promise<{ id: string }> }) {
   const { id } = await params;
   const m = await me();
   const it = await userApi(`/v1/items/${id}`);
+  const contact = await onboardingConfig();
   const thumb = it.meta?.thumbnail || it.media_urls?.[0];
   return (
     <UserShell name={m.user.name || ""}>
@@ -30,6 +32,8 @@ export default async function ItemPage({ params }: { params: Promise<{ id: strin
             {it.raw_text && it.kind !== "screenshot" && <details className="mt-4"><summary className="mono u-faint cursor-pointer">full text</summary><p className="mt-3 text-[13px] leading-relaxed whitespace-pre-wrap u-muted max-w-[620px]">{it.raw_text.slice(0, 30000)}</p></details>}
           </div>
           <aside className="text-sm flex flex-col gap-6 md:pt-10">
+            {contact?.phone && <a href={messageLink(contact.phone, `Let’s talk about saved item #${it.id}: ${it.title}`)} className="u-btn text-center">talk about this with taste ↗</a>}
+            <p className="text-xs u-muted leading-relaxed">what stayed with you? one thought is enough. taste can pick up the conversation from here.</p>
             {it.url && <a href={it.url} target="_blank" className="u-btn text-center">open original ↗</a>}
             <div className="mono u-faint flex flex-col gap-1">
               <span>{it.read_minutes} min read</span><span>surfaced {it.surfaced_count}×</span>

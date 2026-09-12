@@ -1,11 +1,12 @@
 "use client";
-import { motion, AnimatePresence } from "motion/react";
+import { motion, AnimatePresence, useReducedMotion } from "motion/react";
 import type { ReactNode } from "react";
 
 export const ease = [0.25, 0.1, 0.25, 1] as const;
 
 export function Fade({ children, delay = 0, y = 4, className }: { children: ReactNode; delay?: number; y?: number; className?: string }) {
-  return <motion.div initial={{ opacity: 0, y }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.35, delay, ease }} className={className}>{children}</motion.div>;
+  const reduced = useReducedMotion();
+  return <motion.div initial={reduced ? false : { opacity: 0, y }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.35, delay, ease }} className={className}>{children}</motion.div>;
 }
 
 export function Stagger({ children, className, gap = 0.03 }: { children: ReactNode; className?: string; gap?: number }) {
