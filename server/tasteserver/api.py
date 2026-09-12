@@ -428,7 +428,7 @@ def _onboard_unknown(ev):
         inv = db.q("SELECT * FROM invites WHERE token_hash = %s AND used_at IS NULL AND expires_at > now()", (hashlib.sha256(code.encode()).hexdigest(),), one=True)
     if not inv and not db.setting("open_signup"):
         if ratelimit.check(f"unknown_reply:{sender}", 1, 86400):
-            blooio.send_text(sender, "hey. i'm taste, and i'm invite only for now. if someone gave you a code, text it to me.")
+            blooio.send_text(sender, __import__("tasteserver.prompts", fromlist=["copy"]).copy("invite_only"))
         return
     u = db.q("INSERT INTO users(name, email, role, transport, onboarded_at) VALUES (%s, %s, %s, 'blooio', now()) RETURNING *",
              (None, (inv or {}).get("email"), (inv or {}).get("role", "user")), one=True)

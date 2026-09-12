@@ -15,8 +15,12 @@ def new_key():
 
 def create_key(user_id, name, scopes, expires_days=None):
     raw, h, prefix = new_key()
-    r = db.q("INSERT INTO api_keys(user_id, name, key_hash, prefix, scopes, expires_at) VALUES (%s, %s, %s, %s, %s, CASE WHEN %s IS NULL THEN NULL ELSE now() + make_interval(days => %s) END) RETURNING id",
-             (user_id, name, h, prefix, list(scopes), expires_days, expires_days), one=True)
+    if expires_days:
+        r = db.q("INSERT INTO api_keys(user_id, name, key_hash, prefix, scopes, expires_at) VALUES (%s, %s, %s, %s, %s, now() + make_interval(days => %s)) RETURNING id",
+                 (user_id, name, h, prefix, list(scopes), int(expires_days)), one=True)
+    else:
+        r = db.q("INSERT INTO api_keys(user_id, name, key_hash, prefix, scopes) VALUES (%s, %s, %s, %s, %s) RETURNING id",
+                 (user_id, name, h, prefix, list(scopes)), one=True)
     return raw, r["id"]
 
 

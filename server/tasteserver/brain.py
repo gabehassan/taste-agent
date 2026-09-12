@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 from . import db
 from .config import MODEL
 from .media import image_b64
+from .prompts import copy as C, field as F, prompt as PR, style as STYLE, tool as TOOL
 
 _client = None
 
@@ -18,28 +19,23 @@ def client():
         _client = OpenAI(timeout=120, max_retries=2)
     return _client
 
-BASE_VOICE = (
-    "You are texting {name} over iMessage. You are warm, curious, and a little playful: a sharp friend who reads "
-    "everything they send and remembers it, not an assistant. Plain text only (no markdown, no bullet markers, no "
-    "headers, no em dashes). Never explain what you are doing, never say 'as an AI', never apologise for being a bot. "
-    "Match their texting style: {voice}. Short is good. One idea per text."
-)
+BASE_VOICE = PR("voice")
 
 
 def voice_desc(user):
     v = (user.get("state") or {}).get("voice") or {}
     parts = []
     if v.get("lowercase", 0) > 0.7:
-        parts.append("they write in lowercase, so do you")
+        parts.append(STYLE("lowercase"))
     if v.get("avg_len", 0) and v["avg_len"] < 60:
-        parts.append("they send short texts, keep yours short too")
+        parts.append(STYLE("short"))
     if v.get("emoji", 0) > 0.3:
-        parts.append("they use emoji sometimes, you may too, sparingly")
+        parts.append(STYLE("emoji"))
     else:
-        parts.append("no emoji unless they use them first")
+        parts.append(STYLE("no_emoji"))
     if v.get("exclaim", 0) > 0.3:
-        parts.append("they are expressive, be warm and energetic")
-    return "; ".join(parts) if parts else "casual, lowercase is fine, no emoji unless they use them first"
+        parts.append(STYLE("energetic"))
+    return "; ".join(parts) if parts else STYLE("default")
 
 
 def voice(user):
@@ -66,21 +62,18 @@ def _parse(user, instructions, content, schema, effort="medium", max_output_toke
 # ---- digest ---------------------------------------------------------------------
 
 class Digest(BaseModel):
-    title: str = Field(description="Clean, short title for the item")
-    kind: str = Field(description="one of: article, essay, tweet, thread, reddit, tiktok, video, podcast, book, film, paper, screenshot, note, other")
-    summary: str = Field(description="2 to 4 sentences. What it actually says, not what it is about.")
-    snippets: list[str] = Field(description="2 to 5 passages worth coming back to. Verbatim quotes when the source has real text (max ~60 words each). For video, the sharpest lines from the transcript, or a tight paraphrase of the idea if there is no transcript.")
-    tags: list[str] = Field(description="3 to 7 lowercase topic tags")
-    why_saved: str = Field(description="One sentence guessing why they saved this, given their taste profile. Second person.")
-    read_minutes: int = Field(description="Estimated minutes to read or watch the original")
-    reaction: str = Field(description="The tapback to put on their message, one of: love, like, laugh, emphasize, none. love for things that clearly fit their taste, laugh for funny things, emphasize for surprising or intense, like otherwise.")
-    ack: str = Field(description="The text reply to send right now. One or two short sentences, warm, specific: the single most interesting hook from the item, and if it connects to something they saved before, say so. Plain text, no markdown.")
+    title: str = Field(description=F("digest", "title"))
+    kind: str = Field(description=F("digest", "kind"))
+    summary: str = Field(description=F("digest", "summary"))
+    snippets: list[str] = Field(description=F("digest", "snippets"))
+    tags: list[str] = Field(description=F("digest", "tags"))
+    why_saved: str = Field(description=F("digest", "why_saved"))
+    read_minutes: int = Field(description=F("digest", "read_minutes"))
+    reaction: str = Field(description=F("digest", "reaction"))
+    ack: str = Field(description=F("digest", "ack"))
 
 
-DIGEST_SYSTEM = """
-
-They send you things they want to read, watch, or remember: articles, tweets, reddit threads, tiktoks, books, screenshots, stray thoughts. Read each one closely and turn it into a record they can come back to. Quote the source precisely. Do not pad. If the source is thin (a tiktok with only a caption, a book with only a blurb), say what can be said and keep snippets short and honest rather than inventing detail. When frames from a video are attached, use them to understand what is shown, not just said.
-"""
+DIGEST_SYSTEM = "\n\n" + PR("digest") + "\n"
 
 
 def digest(user, extracted, note="", images=(), transcript="", job_id=None):
@@ -104,15 +97,12 @@ def digest(user, extracted, note="", images=(), transcript="", job_id=None):
 # ---- profile --------------------------------------------------------------------
 
 class Profile(BaseModel):
-    profile: str = Field(description="The taste profile as plain prose paragraphs (no markdown). Sections in order: what you keep reaching for; how you like things said (tone, form, length); tensions or contradictions in what you save; what you have not saved but probably would love; what has shifted recently. Second person, specific, 250 to 500 words. Cite actual saved items by title when making a claim. Use ratings from letterboxd/goodreads as explicit signal when present.")
-    observations: list[str] = Field(description="8 to 15 standalone one-liners about their taste that would be fun to receive as a random text from a friend. Second person, specific, each under 30 words, each referencing a real saved item or a concrete pattern, some connecting two items they may not have connected themselves. No em dashes.")
-    one_liner: str = Field(description="A single sentence that captures their taste right now, under 25 words.")
+    profile: str = Field(description=F("profile", "profile"))
+    observations: list[str] = Field(description=F("profile", "observations"))
+    one_liner: str = Field(description=F("profile", "one_liner"))
 
 
-PROFILE_SYSTEM = """
-
-You maintain a living profile of their taste, built only from what they have actually sent you or rated. Be concrete and a little opinionated. Notice form as much as subject: long essays or one-line tweets, arguments or vibes, practical or contemplative. Notice what they reacted to (love, laugh) versus ignored. Update the previous profile rather than rewriting from scratch when one exists; keep what still holds, drop what no longer does, and say what changed.
-"""
+PROFILE_SYSTEM = "\n\n" + PR("profile") + "\n"
 
 
 def refresh_profile(user, job_id=None):
@@ -147,16 +137,16 @@ def refresh_profile(user, job_id=None):
 
 TOOLS = [
     {"type": "function", "name": "search_items", "strict": False,
-     "description": "Full-text search over their saved items (title, summary, tags, text, notes).",
+     "description": TOOL("search_items"),
      "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}},
-    {"type": "function", "name": "list_recent", "strict": False, "description": "Most recently saved items.",
+    {"type": "function", "name": "list_recent", "strict": False, "description": TOOL("list_recent"),
      "parameters": {"type": "object", "properties": {"n": {"type": "integer"}, "status": {"type": "string"}}}},
-    {"type": "function", "name": "get_item", "strict": False, "description": "One item in full, with snippets and text.",
+    {"type": "function", "name": "get_item", "strict": False, "description": TOOL("get_item"),
      "parameters": {"type": "object", "properties": {"id": {"type": "integer"}}, "required": ["id"]}},
-    {"type": "function", "name": "mark_item", "strict": False, "description": "Set an item's status: read, unread, archived.",
+    {"type": "function", "name": "mark_item", "strict": False, "description": TOOL("mark_item"),
      "parameters": {"type": "object", "properties": {"id": {"type": "integer"}, "status": {"type": "string"}}, "required": ["id", "status"]}},
     {"type": "function", "name": "save_note", "strict": False,
-     "description": "Save something they said as an item (a book they want to read, a thought, a recommendation someone gave them). Use when the message is clearly something to remember rather than a question.",
+     "description": TOOL("save_note"),
      "parameters": {"type": "object", "properties": {"title": {"type": "string"}, "kind": {"type": "string"}, "text": {"type": "string"}, "tags": {"type": "array", "items": {"type": "string"}}}, "required": ["title", "kind", "text"]}},
 ]
 
@@ -201,10 +191,7 @@ def _brief(items):
                        for i in items], default=str)
 
 
-CHAT_SYSTEM = """
-
-You are their taste agent. They send you links and thoughts; you keep them, learn their taste, and text them bits back. Right now they texted something that is not a link. Figure out what they want: a question about their stuff (use the tools), a recommendation from their own queue, something to remember (save_note), a reaction to the last thing you sent, or just conversation. Reply like a friend would, a few sentences at most. If you list items, use short lines with the title and, if useful, the link. When they ask what to read, pick from their unread items and say why in one line each. If they are just reacting ("lol", "wow", "ok"), reply in kind, briefly, or with one follow-on thought.
-"""
+CHAT_SYSTEM = "\n\n" + PR("chat") + "\n"
 
 
 def chat(user, user_text, job_id=None):

@@ -115,12 +115,10 @@ def pick_item(user, exclude_id=None):
 def format_surface(item):
     snippets = item["snippets"]
     snippet = snippets[item["surfaced_count"] % len(snippets)]
+    from .prompts import surface_format
     by = f" by {item['author']}" if item.get("author") else ""
     src = item.get("source") or item["kind"]
-    lines = [f"“{snippet}”", "", f"from: {item['title']}{by} ({src})"]
-    if item.get("url"):
-        lines.append(item["url"])
-    return "\n".join(lines)
+    return surface_format().format(snippet=snippet, title=item["title"], by=by, source=src, url=item.get("url") or "").rstrip()
 
 
 def next_surface(user, force_kind=None):

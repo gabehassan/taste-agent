@@ -4,6 +4,7 @@ WORKDIR /app
 COPY pyproject.toml ./
 COPY tasteserver ./tasteserver
 COPY start.sh ./start.sh
+COPY prompts.toml ./prompts.toml
 RUN pip install --no-cache-dir .
 ENV PYTHONUNBUFFERED=1
 CMD ["./start.sh"]

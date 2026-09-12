@@ -5,6 +5,7 @@ import time
 import uuid
 
 from . import brain, db, media, ratelimit, storage
+from .prompts import copy as C
 from .fetch import Extracted, canonical, extract
 
 log = logging.getLogger("taste.handlers")
@@ -86,9 +87,9 @@ def ingest_url(user, url, note="", message_id=None, job_id=None):
     can = canonical(url)
     existing = db.find_by_url(user["id"], can) or db.find_by_url(user["id"], url)
     if existing and existing["status"] != "pending":
-        return existing, f"you already sent me that one ({existing['title']}). want the best bit from it?", "like"
+        return existing, C("already_saved", title=existing["title"]), "like"
     if not ratelimit.check(f"ingest:{user['id']}", int(db.setting("rate_ingest_per_day")), 86400):
-        return None, "you've hit today's ingest limit. tomorrow.", "none"
+        return None, C("ingest_limit"), "none"
     ex = extract(url)
     item_key = uuid.uuid4().hex[:12]
     transcript, images, media_files, seconds = "", [], [], 0.0
@@ -163,7 +164,7 @@ def command_for(text):
 def do_surface(user, force_kind=None):
     kind, item, text = next_surface_and_log(user, force_kind)
     if not text:
-        return out(user, "nothing saved yet. send me a link.")
+        return out(user, C("nothing_saved"))
     return out(user, text)
 
 
@@ -185,7 +186,7 @@ def do_more(user):
         return do_surface(user)
     item = db.get_item(user["id"], last["item_id"])
     if not item or len(item["snippets"]) < 2:
-        return out(user, "that's all i pulled from that one. " + (item["url"] or "" if item else ""))
+        return out(user, C("more_exhausted", url=(item["url"] or "") if item else ""))
     db.update_item(item["id"], surfaced_count=item["surfaced_count"] + 1)
     text = format_surface(db.get_item(user["id"], item["id"]))
     db.log_surface(user["id"], item["id"], "snippet", text)
@@ -196,7 +197,7 @@ def do_profile(user, job_id=None):
     p = db.latest_profile(user["id"])
     if not p:
         if db.count_items(user["id"]) == 0:
-            return out(user, "no profile yet. send me a few things first.")
+            return out(user, C("no_profile_yet"))
         brain.refresh_profile(user, job_id=job_id)
         p = db.latest_profile(user["id"])
     text = (p["one_liner"] + "\n\n" if p.get("one_liner") else "") + p["text"]
@@ -226,7 +227,7 @@ def do_login_link(user):
     tok = secrets.token_urlsafe(24)
     db.q("INSERT INTO login_tokens(token_hash, user_id, expires_at) VALUES (%s, %s, now() + interval '15 minutes')",
          (hashlib.sha256(tok.encode()).hexdigest(), user["id"]))
-    return out(user, f"here's your link, good for 15 minutes:\n{DASHBOARD_URL}/auth?token={tok}")
+    return out(user, C("login_link", url=f"{DASHBOARD_URL}/auth?token={tok}"))
 
 
 # ---- inbound dispatcher -----------------------------------------------------------------
@@ -249,7 +250,7 @@ def handle_message(job):
         ok, why = db.spend_ok(user)
         if not ok:
             if not db.user_state(user["id"]).get("cap_notified") == time.strftime("%Y-%m-%d"):
-                out(user, f"saved, but i'm paused until tomorrow ({why}).")
+                out(user, C("spend_cap", why=why))
                 db.set_user_state(user["id"], cap_notified=time.strftime("%Y-%m-%d"))
             for u in urls[:3]:
                 db.add_item(user["id"], url=u, canonical_url=canonical(u), kind="link", title=u, summary="(pending)", status="pending",
@@ -271,7 +272,7 @@ def handle_message(job):
                 if not db.find_by_url(user["id"], canonical(u)):
                     db.add_item(user["id"], url=u, canonical_url=canonical(u), kind="link", title=u, summary="(pending)", status="pending",
                                 note=note or None, message_id=msg["id"])
-                out(user, f"saved the link but couldn't read it yet ({type(e).__name__}). i'll try again later.")
+                out(user, C("fetch_failed", error=type(e).__name__))
         return
     if images:
         for a in images[:2]:
@@ -281,17 +282,17 @@ def handle_message(job):
                 out(user, ack)
             except Exception:
                 log.exception("image ingest failed")
-                out(user, "couldn't read that image.")
+                out(user, C("image_failed"))
         return
     if not text:
         return
     cmd = command_for(text)
     if cmd == "pause":
         db.q("UPDATE users SET settings = settings || '{\"paused\": true}' WHERE id = %s", (user["id"],))
-        return out(user, "paused. say resume when you want me back.")
+        return out(user, C("paused"))
     if cmd == "resume":
         db.q("UPDATE users SET settings = settings - 'paused' WHERE id = %s", (user["id"],))
-        return out(user, "back.")
+        return out(user, C("resumed"))
     if cmd == "profile":
         return do_profile(user, job_id=job["id"])
     if cmd == "surface":
@@ -302,8 +303,8 @@ def handle_message(job):
         last = db.last_surface(user["id"])
         if last and last.get("item_id"):
             db.update_item(last["item_id"], status="read")
-            return react(user, msg, "like") or out(user, "marked read.")
-        return out(user, "nothing to mark.")
+            return react(user, msg, "like") or out(user, C("marked_read"))
+        return out(user, C("nothing_to_mark"))
     if cmd == "status":
         return do_status(user)
     if cmd == "help":
@@ -314,7 +315,7 @@ def handle_message(job):
     if not ok:
         return
     if not ratelimit.check(f"chat:{user['id']}", int(db.setting("rate_chat_per_day")), 86400):
-        return out(user, "i've talked a lot today. tomorrow.")
+        return out(user, C("chat_limit"))
     reply = brain.chat(user, text, job_id=job["id"])
     if reply:
         out(user, reply)
