@@ -28,11 +28,27 @@ def react(user, message, reaction):
     if reaction in (None, "", "none"):
         return None
     caps = _capabilities(user)
+    if user.get("transport") == "blooio":
+        caps = caps | {"react", "typing"}
     if "react" not in caps or not message.get("external_id"):
         return None
     return db.q("""INSERT INTO messages(user_id, direction, kind, text, status, meta) VALUES (%s, 'out', 'reaction', NULL, 'queued', %s)
                    RETURNING id""", (user["id"], db.J({"reaction": reaction, "emoji": REACTION_EMOJI.get(reaction, "❤️"),
-                                                       "target_external_id": message["external_id"]})), one=True)["id"]
+                                                       "target_external_id": message["external_id"], "chat_id": message.get("chat_id")})), one=True)["id"]
+
+
+def instant_ack(user, msg, reaction="like"):
+    """Poke feel: tapback the moment a link or photo lands, before any fetching. Blooio only (needs a chat id)."""
+    if user.get("transport") != "blooio" or not msg.get("chat_id") or not msg.get("external_id"):
+        return
+    try:
+        from . import blooio
+        blooio.mark_read(msg["chat_id"])
+        if reaction:
+            blooio.react(msg["chat_id"], msg["external_id"], reaction)
+        blooio.typing(msg["chat_id"], True)
+    except Exception:
+        log.exception("instant ack failed")
 
 
 def _capabilities(user):
@@ -128,6 +144,7 @@ CMD = {
     "read": ("read", "done", "finished", "read it", "watched", "watched it"),
     "status": ("status", "stats"),
     "help": ("help", "?", "what can you do"),
+    "login": ("login", "log in", "dashboard", "link", "website", "sign in"),
 }
 
 HELP = ("send me links (articles, tweets, reddit, tiktok, youtube, goodreads), screenshots, or just a book title or a "
@@ -197,6 +214,21 @@ def do_status(user):
                      f"spent ${db.spend(user['id'], 1):.2f} today.")
 
 
+WELCOME = ("hey. i'm taste.\n\nsend me anything you want to read, watch, or remember: links, tiktoks, tweets, screenshots, "
+           "a book someone mentioned. i'll read it properly, keep it, and text you the good bits back when you've half forgotten them.\n\n"
+           "over time i learn what you actually like. say 'taste' whenever you want to see what i've figured out.")
+
+
+def do_login_link(user):
+    """Magic link over iMessage: the phone itself is the credential."""
+    import hashlib, secrets
+    from .config import DASHBOARD_URL
+    tok = secrets.token_urlsafe(24)
+    db.q("INSERT INTO login_tokens(token_hash, user_id, expires_at) VALUES (%s, %s, now() + interval '15 minutes')",
+         (hashlib.sha256(tok.encode()).hexdigest(), user["id"]))
+    return out(user, f"here's your link, good for 15 minutes:\n{DASHBOARD_URL}/auth?token={tok}")
+
+
 # ---- inbound dispatcher -----------------------------------------------------------------
 
 def handle_message(job):
@@ -223,6 +255,10 @@ def handle_message(job):
                 db.add_item(user["id"], url=u, canonical_url=canonical(u), kind="link", title=u, summary="(pending)", status="pending",
                             note=URL_RE.sub("", text).strip() or None, message_id=msg["id"])
             return
+    if urls or images:
+        instant_ack(user, msg, "like")
+    elif text and not command_for(text):
+        instant_ack(user, msg, "")  # read receipt + typing only
     if urls:
         note = URL_RE.sub("", text).strip()
         for u in urls[:3]:
@@ -272,6 +308,8 @@ def handle_message(job):
         return do_status(user)
     if cmd == "help":
         return out(user, HELP)
+    if cmd == "login":
+        return do_login_link(user)
     ok, why = db.spend_ok(user)
     if not ok:
         return

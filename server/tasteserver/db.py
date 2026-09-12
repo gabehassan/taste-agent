@@ -172,9 +172,13 @@ def recent_chat(user_id, n=12, max_age_hours=12):
 
 # ---- messages (in/out) ---------------------------------------------------------
 
-def queue_outbound(user_id, text, handle_id=None):
-    return q("INSERT INTO messages(user_id, direction, handle_id, text, status) VALUES (%s, 'out', %s, %s, 'queued') RETURNING id",
-             (user_id, handle_id, text), one=True)["id"]
+def queue_outbound(user_id, text, handle_id=None, meta=None):
+    return q("INSERT INTO messages(user_id, direction, handle_id, text, status, meta) VALUES (%s, 'out', %s, %s, 'queued', %s) RETURNING id",
+             (user_id, handle_id, text, Jsonb(meta or {})), one=True)["id"]
+
+
+def last_inbound(user_id):
+    return q("SELECT * FROM messages WHERE user_id = %s AND direction = 'in' ORDER BY id DESC LIMIT 1", (user_id,), one=True)
 
 
 def outbound_sends_last_hour(user_id):

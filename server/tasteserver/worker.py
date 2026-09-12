@@ -5,7 +5,7 @@ import socket
 import threading
 import time
 
-from . import db, handlers, ratelimit
+from . import db, dispatch, handlers, ratelimit
 from .netguard import Blocked
 from .config import WORKER_CONCURRENCY
 from .connections import sync_all_due
@@ -36,6 +36,15 @@ def job_loop(n):
             db.finish_job(job["id"], False, error=f"{type(e).__name__}: {e}", retry_in=60 * job["attempts"] if retry else None)
 
 
+def dispatch_loop():
+    while True:
+        try:
+            dispatch.run_once()
+        except Exception:
+            log.exception("dispatch loop")
+        time.sleep(2)
+
+
 def tick_loop():
     last_hourly = 0
     while True:
@@ -60,6 +69,7 @@ def main():
     log.info("worker %s up, concurrency %s", WORKER_ID, WORKER_CONCURRENCY)
     for n in range(WORKER_CONCURRENCY):
         threading.Thread(target=job_loop, args=(n,), daemon=True).start()
+    threading.Thread(target=dispatch_loop, daemon=True).start()
     tick_loop()
 
 

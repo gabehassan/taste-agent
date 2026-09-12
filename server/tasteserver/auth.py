@@ -13,10 +13,10 @@ def new_key():
     return raw, hashlib.sha256(raw.encode()).hexdigest(), raw[:10]
 
 
-def create_key(user_id, name, scopes):
+def create_key(user_id, name, scopes, expires_days=None):
     raw, h, prefix = new_key()
-    r = db.q("INSERT INTO api_keys(user_id, name, key_hash, prefix, scopes) VALUES (%s, %s, %s, %s, %s) RETURNING id",
-             (user_id, name, h, prefix, list(scopes)), one=True)
+    r = db.q("INSERT INTO api_keys(user_id, name, key_hash, prefix, scopes, expires_at) VALUES (%s, %s, %s, %s, %s, CASE WHEN %s IS NULL THEN NULL ELSE now() + make_interval(days => %s) END) RETURNING id",
+             (user_id, name, h, prefix, list(scopes), expires_days, expires_days), one=True)
     return raw, r["id"]
 
 
@@ -24,7 +24,7 @@ def lookup(raw):
     if not raw or not raw.startswith("tk_"):
         return None
     h = hashlib.sha256(raw.encode()).hexdigest()
-    k = db.q("SELECT * FROM api_keys WHERE key_hash = %s AND revoked_at IS NULL", (h,), one=True)
+    k = db.q("SELECT * FROM api_keys WHERE key_hash = %s AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > now())", (h,), one=True)
     if not k:
         return None
     db.q("UPDATE api_keys SET last_used_at = now() WHERE id = %s", (k["id"],))

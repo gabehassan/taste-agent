@@ -27,7 +27,7 @@ export function verifyToken(tok: string | undefined) {
 
 export async function requireSession() {
   const jar = await cookies();
-  if (!verifyToken(jar.get(COOKIE)?.value)) redirect("/login");
+  if (!verifyToken(jar.get(COOKIE)?.value)) redirect("/admin/login");
 }
 
 export async function setSession() {

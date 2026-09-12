@@ -1,7 +1,7 @@
-import Shell from "../shell";
+import Shell from "@/app/admin/shell";
 import { api, fmtDate, fmtMoney } from "@/lib/api";
 import { requireSession } from "@/lib/session";
-import { addHandle, createKey, createUser, revokeKey, setUserCap, toggleUser } from "../actions";
+import { addHandle, createKey, createUser, revokeKey, setUserCap, toggleUser } from "@/app/admin/actions";
 
 export default async function Users({ searchParams }: { searchParams: Promise<{ newkey?: string }> }) {
   await requireSession();

@@ -1,7 +1,7 @@
-import Shell from "../shell";
+import Shell from "@/app/admin/shell";
 import { api, fmtDate } from "@/lib/api";
 import { requireSession } from "@/lib/session";
-import { retryJob } from "../actions";
+import { retryJob } from "@/app/admin/actions";
 
 export default async function Logs() {
   await requireSession();

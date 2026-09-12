@@ -1,12 +1,16 @@
 import type { Metadata } from "next";
+import { Fraunces, Instrument_Sans } from "next/font/google";
 import "./globals.css";
 
-export const metadata: Metadata = { title: "taste admin", description: "manage the taste agent" };
+const display = Fraunces({ subsets: ["latin"], variable: "--font-display", axes: ["opsz", "SOFT"] });
+const sans = Instrument_Sans({ subsets: ["latin"], variable: "--font-sans" });
+
+export const metadata: Metadata = { title: "taste", description: "the friend who reads everything you send" };
 
 export default function RootLayout({ children }: { children: React.ReactNode }) {
   return (
-    <html lang="en">
-      <body className="min-h-screen bg-neutral-950 text-neutral-100 antialiased">{children}</body>
+    <html lang="en" className={`${display.variable} ${sans.variable}`}>
+      <body className="min-h-screen antialiased">{children}</body>
     </html>
   );
 }

@@ -1,7 +1,7 @@
-import Shell, { actingUser } from "../shell";
+import Shell, { actingUser } from "@/app/admin/shell";
 import { api, fmtDate } from "@/lib/api";
 import { requireSession } from "@/lib/session";
-import { refreshProfile, surfaceNow } from "../actions";
+import { refreshProfile, surfaceNow } from "@/app/admin/actions";
 
 export default async function ProfilePage() {
   await requireSession();

@@ -13,7 +13,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel, Field
 
-from . import auth, db, ratelimit, storage
+from . import auth, blooio, db, ratelimit, storage
 from .auth import Principal, require, target_user
 from .config import DASHBOARD_ORIGIN, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS, MAX_BODY_BYTES
 from .connections import TYPES as CONNECTION_TYPES
@@ -163,6 +163,8 @@ def transport_hello(body: Hello, p: Principal = Depends(require("transport"))):
 def outbound(request: Request, p: Principal = Depends(require("transport"))):
     _key_rate(p)
     u = target_user(request, p)
+    if u.get("transport") != "mac":
+        return {"messages": []}
     rows = db.q("SELECT id, kind, text, meta, created_at FROM messages WHERE user_id = %s AND direction = 'out' AND status = 'queued' ORDER BY id LIMIT 20", (u["id"],))
     return {"messages": [dict(r) for r in rows]}
 
@@ -191,7 +193,45 @@ def ack(mid: int, body: Ack, request: Request, p: Principal = Depends(require("t
 @app.get("/v1/me")
 def me(request: Request, p: Principal = Depends(require("user", "transport"))):
     u = target_user(request, p)
-    return {"user": _clean(u), "scopes": sorted(p.scopes), "spend_today": db.spend(u["id"], 1)}
+    from .scheduler import todays_plan
+    return {"user": _clean(u), "scopes": sorted(p.scopes), "spend_today": db.spend(u["id"], 1),
+            "plan": todays_plan(u), "counts": {"items": db.count_items(u["id"]), "unread": db.count_items(u["id"], "unread")},
+            "one_liner": (db.latest_profile(u["id"]) or {}).get("one_liner")}
+
+
+class MeSettings(BaseModel):
+    name: Optional[str] = None
+    tz: Optional[str] = None
+    surfaces_per_day: Optional[int] = None
+    wake_start: Optional[int] = None
+    wake_end: Optional[int] = None
+    paused: Optional[bool] = None
+
+
+@app.patch("/v1/me")
+def patch_me(body: MeSettings, request: Request, p: Principal = Depends(require("user"))):
+    u = target_user(request, p)
+    if body.name is not None:
+        db.q("UPDATE users SET name = %s WHERE id = %s", (body.name[:80], u["id"]))
+    if body.tz is not None:
+        from zoneinfo import ZoneInfo
+        try:
+            ZoneInfo(body.tz)
+        except Exception:
+            raise HTTPException(400, "bad tz")
+        db.q("UPDATE users SET tz = %s WHERE id = %s", (body.tz, u["id"]))
+    patch = {}
+    if body.surfaces_per_day is not None:
+        patch["surfaces_per_day"] = max(0, min(body.surfaces_per_day, 8))
+    if body.wake_start is not None:
+        patch["wake_start"] = max(0, min(body.wake_start, 23))
+    if body.wake_end is not None:
+        patch["wake_end"] = max(1, min(body.wake_end, 24))
+    if body.paused is not None:
+        patch["paused"] = body.paused
+    if patch:
+        db.q("UPDATE users SET settings = settings || %s, state = state - 'plan' WHERE id = %s", (db.J(patch), u["id"]))
+    return _clean(db.get_user(u["id"]))
 
 
 @app.get("/v1/items")
@@ -350,6 +390,156 @@ def delete_connection(cid: str, request: Request, p: Principal = Depends(require
 
 
 # =============================================================================
+# blooio webhook (hosted iMessage number) + onboarding
+# =============================================================================
+
+def _store_remote_attachments(uid, atts):
+    from . import netguard
+    stored = []
+    msg_key = uuid.uuid4().hex[:12]
+    for i, a in enumerate(atts[:MAX_ATTACHMENTS]):
+        try:
+            r = netguard.get(a["url"], max_bytes=MAX_ATTACHMENT_BYTES, timeout=20)
+            ct = (a.get("content_type") or r.headers.get("content-type", "")).split(";")[0].strip()
+            if not ct.startswith("image/"):
+                continue
+            ext = {"image/jpeg": "jpg", "image/png": "png", "image/gif": "gif", "image/webp": "webp", "image/heic": "heic"}.get(ct, "bin")
+            key = f"users/{uid}/in/{msg_key}/{i}.{ext}"
+            storage.put(key, r.content, ct)
+            stored.append({"key": key, "content_type": ct, "bytes": len(r.content), "name": a.get("name", "file")[:80]})
+        except Exception as e:
+            log.info("attachment fetch failed: %s", e)
+    return stored
+
+
+def _onboard_unknown(ev):
+    """Someone new texted the number. Invite-only unless open_signup is on."""
+    sender, text = ev["sender"], (ev.get("text") or "").strip()
+    if not sender:
+        return
+    if not ratelimit.check(f"unknown:{sender}", 5, 86400):
+        return
+    code = None
+    m = __import__("re").search(r"\b([A-Za-z0-9_-]{16,})\b", text)
+    if m:
+        code = m.group(1)
+    inv = None
+    if code:
+        inv = db.q("SELECT * FROM invites WHERE token_hash = %s AND used_at IS NULL AND expires_at > now()", (hashlib.sha256(code.encode()).hexdigest(),), one=True)
+    if not inv and not db.setting("open_signup"):
+        if ratelimit.check(f"unknown_reply:{sender}", 1, 86400):
+            blooio.send_text(sender, "hey. i'm taste, and i'm invite only for now. if someone gave you a code, text it to me.")
+        return
+    u = db.q("INSERT INTO users(name, email, role, transport, onboarded_at) VALUES (%s, %s, %s, 'blooio', now()) RETURNING *",
+             (None, (inv or {}).get("email"), (inv or {}).get("role", "user")), one=True)
+    db.q("INSERT INTO handles(user_id, kind, address, capabilities, last_seen_at) VALUES (%s, 'imessage', %s, %s, now())",
+         (u["id"], sender, db.J(["react", "typing"])))
+    if inv:
+        db.q("UPDATE invites SET used_at = now() WHERE id = %s", (inv["id"],))
+    db.audit(None, u["id"], "user.onboard", {"via": "blooio", "invite": bool(inv)})
+    from .handlers import WELCOME
+    db.queue_outbound(u["id"], WELCOME, meta={"chat_id": ev.get("chat_id")})
+    return u
+
+
+@app.post("/v1/webhooks/blooio")
+async def blooio_webhook(request: Request):
+    raw = await request.body()
+    if not blooio.verify(raw, request.headers.get("x-blooio-signature", "")):
+        raise HTTPException(401, "bad signature")
+    import json as _json
+    evt = _json.loads(raw or b"{}")
+    eid = evt.get("id")
+    if eid:
+        if db.q("SELECT 1 FROM webhook_events WHERE id = %s", (eid,)):
+            return {"ok": True, "duplicate": True}
+        db.q("INSERT INTO webhook_events(id) VALUES (%s) ON CONFLICT DO NOTHING", (eid,))
+    ev = blooio.parse_event(evt)
+    if not ev:
+        log.info("blooio event ignored: %s", evt.get("type"))
+        return {"ok": True, "ignored": evt.get("type")}
+    h = db.q("SELECT * FROM handles WHERE address = %s", (ev["sender"],), one=True)
+    if not h:
+        u = _onboard_unknown(ev)
+        if not u:
+            return {"ok": True, "unknown": True}
+        h = db.q("SELECT * FROM handles WHERE address = %s", (ev["sender"],), one=True)
+        return {"ok": True, "onboarded": True}
+    uid = h["user_id"]
+    user = db.get_user(uid)
+    if not user or user["status"] != "active":
+        return {"ok": True, "inactive": True}
+    if not ratelimit.check(f"inbound_h:{uid}", int(db.setting("rate_inbound_per_hour")), 3600) or \
+       not ratelimit.check(f"inbound_d:{uid}", int(db.setting("rate_inbound_per_day")), 86400):
+        return {"ok": True, "rate_limited": True}
+    if user.get("transport") != "blooio":
+        db.q("UPDATE users SET transport = 'blooio' WHERE id = %s", (uid,))
+    db.q("UPDATE handles SET last_seen_at = now(), capabilities = %s WHERE id = %s", (db.J(["react", "typing"]), h["id"]))
+    if ev["kind"] == "reaction":
+        m = db.q("""INSERT INTO messages(user_id, direction, handle_id, text, kind, external_id, status, meta, chat_id)
+                    VALUES (%s, 'in', %s, '', 'reaction', %s, 'received', %s, %s) RETURNING id""",
+                 (uid, h["id"], ev["event_id"], db.J({"reaction": ev["reaction"], "target_external_id": ev.get("target_message_id")}), ev.get("chat_id")), one=True)
+    else:
+        if db.q("SELECT 1 FROM messages WHERE user_id = %s AND direction = 'in' AND external_id = %s", (uid, ev["message_id"])):
+            return {"ok": True, "duplicate": True}
+        stored = _store_remote_attachments(uid, ev["attachments"]) if ev["attachments"] else []
+        m = db.q("""INSERT INTO messages(user_id, direction, handle_id, text, kind, attachments, external_id, status, chat_id)
+                    VALUES (%s, 'in', %s, %s, 'text', %s, %s, 'received', %s) RETURNING id""",
+                 (uid, h["id"], (ev["text"] or "")[:8000], db.J(stored), ev["message_id"], ev.get("chat_id")), one=True)
+    job = db.enqueue(uid, "handle_message", {"message_id": m["id"]})
+    return {"ok": True, "message_id": m["id"], "job_id": job}
+
+
+# =============================================================================
+# user login over iMessage (magic link)
+# =============================================================================
+
+class AuthRequest(BaseModel):
+    phone: str
+
+
+@app.post("/v1/auth/request")
+def auth_request(body: AuthRequest, request: Request):
+    """Public. Texts a login link to the phone if it belongs to a user. Never reveals whether it does."""
+    ip = request.headers.get("x-forwarded-for", "").split(",")[0].strip() or "?"
+    ratelimit.hit(f"auth_ip:{ip}", 10, 3600)
+    phone = blooio.normalize(body.phone)
+    if not phone or len(phone) < 8:
+        return {"ok": True}
+    ratelimit.hit(f"auth_phone:{phone}", 3, 3600)
+    h = db.q("SELECT * FROM handles WHERE address = %s", (phone,), one=True)
+    if h:
+        u = db.get_user(h["user_id"])
+        if u and u["status"] == "active":
+            from .handlers import do_login_link
+            do_login_link(u)
+    return {"ok": True}
+
+
+class AuthExchange(BaseModel):
+    token: str
+
+
+@app.post("/v1/auth/exchange")
+def auth_exchange(body: AuthExchange, request: Request):
+    ip = request.headers.get("x-forwarded-for", "").split(",")[0].strip() or "?"
+    ratelimit.hit(f"auth_x:{ip}", 20, 3600)
+    th = hashlib.sha256(body.token.encode()).hexdigest()
+    t = db.q("UPDATE login_tokens SET used_at = now() WHERE token_hash = %s AND used_at IS NULL AND expires_at > now() RETURNING user_id", (th,), one=True)
+    if not t:
+        raise HTTPException(401, "invalid or expired link")
+    raw, kid = auth.create_key(t["user_id"], "web session", ["user"], expires_days=30)
+    db.audit(kid, t["user_id"], "auth.login", {"ip": ip})
+    return {"key": raw, "user_id": str(t["user_id"]), "expires_days": 30}
+
+
+@app.post("/v1/auth/logout")
+def auth_logout(p: Principal = Depends(require("user"))):
+    db.q("UPDATE api_keys SET revoked_at = now() WHERE id = %s", (p.key_id,))
+    return {"ok": True}
+
+
+# =============================================================================
 # admin
 # =============================================================================
 
@@ -416,6 +606,7 @@ class UserPatch(BaseModel):
     status: Optional[str] = None
     role: Optional[str] = None
     tz: Optional[str] = None
+    transport: Optional[str] = None
     settings: Optional[dict] = None
 
 
@@ -425,6 +616,8 @@ def patch_user(uid: str, body: UserPatch, p: Principal = Depends(require("admin"
     if not u:
         raise HTTPException(404)
     f = {k: v for k, v in body.model_dump().items() if v is not None}
+    if "transport" in f and f["transport"] not in ("mac", "blooio"):
+        raise HTTPException(400, "transport must be mac or blooio")
     if "settings" in f:
         db.q("UPDATE users SET settings = settings || %s WHERE id = %s", (db.J(f.pop("settings")), uid))
     if f:

@@ -4,6 +4,7 @@ DATABASE_URL = os.environ["DATABASE_URL"]
 MODEL = os.environ.get("TASTE_MODEL", "gpt-5.6-luna")
 TRANSCRIBE_MODEL = os.environ.get("TASTE_TRANSCRIBE_MODEL", "gpt-4o-mini-transcribe")
 DASHBOARD_ORIGIN = os.environ.get("DASHBOARD_ORIGIN", "")
+DASHBOARD_URL = os.environ.get("DASHBOARD_URL", "http://localhost:3000")
 
 # object storage (S3 compatible: Railway bucket or Cloudflare R2)
 # Named S3_* on purpose: AWS_* names leak into Railway's own builder and break image pushes.
@@ -47,6 +48,7 @@ DEFAULT_SETTINGS = {
     "rate_ingest_per_day": 100,
     "rate_chat_per_day": 100,
     "rate_outbound_per_hour": 20,
+    "open_signup": False,
     # USD per 1M tokens (in/out/cached) or per minute of audio. EDIT in dashboard if wrong.
     "model_prices": {
         "gpt-5.6-luna": {"in": 0.20, "out": 1.20, "cached_in": 0.02},

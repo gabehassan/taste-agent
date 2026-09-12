@@ -1,31 +1,31 @@
-import Shell from "../shell";
-import { api } from "@/lib/api";
-import { requireSession } from "@/lib/session";
-import { saveSettings } from "../actions";
+import UserShell, { me } from "../user-shell";
+import { Fade } from "@/components/motion";
+import { saveSettings } from "../user-actions";
 
-const GROUPS: Record<string, string[]> = {
-  "spending": ["global_daily_cap_usd", "global_monthly_cap_usd", "default_user_daily_cap_usd"],
-  "surfacing defaults": ["surfaces_per_day", "wake_start", "wake_end", "min_gap_minutes", "observation_chance", "profile_refresh_every", "profile_max_age_hours"],
-  "rate limits": ["rate_ip_per_min", "rate_key_per_hour", "rate_inbound_per_hour", "rate_inbound_per_day", "rate_ingest_per_day", "rate_chat_per_day", "rate_outbound_per_hour"],
-};
-
-export default async function Settings({ searchParams }: { searchParams: Promise<{ e?: string }> }) {
-  await requireSession();
-  const { e } = await searchParams;
-  const { settings } = await api("/v1/admin/settings");
+export default async function Settings() {
+  const m = await me();
+  const u = m.user; const s = u.settings || {};
+  const hours = Array.from({ length: 24 }, (_, i) => i);
+  const fmt = (h: number) => `${((h + 11) % 12) + 1}${h < 12 ? "am" : "pm"}`;
   return (
-    <Shell title="settings">
-      {e === "json" && <div className="text-red-400 mb-3">model_prices was not valid JSON</div>}
-      <form action={saveSettings} className="flex flex-col gap-6">
-        {Object.entries(GROUPS).map(([g, keys]) => (
-          <div key={g} className="card"><div className="font-medium mb-3">{g}</div>
-            <div className="grid md:grid-cols-4 gap-3">{keys.map(k => <label key={k} className="text-xs muted flex flex-col gap-1">{k}<input name={k} type="number" step="any" defaultValue={settings[k]} /></label>)}</div>
+    <UserShell name={u.name || ""}>
+      <Fade><h1 className="display text-4xl pt-6 mb-8">settings</h1></Fade>
+      <Fade delay={0.1}>
+        <form action={saveSettings} className="u-card p-6 flex flex-col gap-6 max-w-xl">
+          <label className="flex flex-col gap-2"><span className="u-kicker">what should I call you</span><input name="name" defaultValue={u.name || ""} className="u-input" /></label>
+          <div className="flex flex-col gap-2"><span className="u-kicker">how many times a day should I text you something</span>
+            <div className="flex gap-2 flex-wrap">{[0, 1, 2, 3, 4, 5].map(n => <label key={n} className="u-chip cursor-pointer" style={{ padding: "8px 14px" }}><input type="radio" name="surfaces_per_day" value={n} defaultChecked={(s.surfaces_per_day ?? 3) === n} className="mr-2" />{n === 0 ? "never" : n}</label>)}</div>
           </div>
-        ))}
-        <div className="card"><div className="font-medium mb-1">model prices</div><div className="muted text-xs mb-2">USD per 1M tokens (in / out / cached_in) or per_minute for audio. Used to compute spend against the caps.</div>
-          <textarea name="model_prices" rows={8} className="w-full font-mono text-xs" defaultValue={JSON.stringify(settings.model_prices, null, 2)} /></div>
-        <div><button>save</button></div>
-      </form>
-    </Shell>
+          <div className="grid grid-cols-2 gap-4">
+            <label className="flex flex-col gap-2"><span className="u-kicker">not before</span><select name="wake_start" defaultValue={s.wake_start ?? 10} className="u-input">{hours.map(h => <option key={h} value={h}>{fmt(h)}</option>)}</select></label>
+            <label className="flex flex-col gap-2"><span className="u-kicker">not after</span><select name="wake_end" defaultValue={s.wake_end ?? 22} className="u-input">{hours.slice(1).concat([24]).map(h => <option key={h} value={h}>{h === 24 ? "midnight" : fmt(h)}</option>)}</select></label>
+          </div>
+          <label className="flex flex-col gap-2"><span className="u-kicker">time zone</span><input name="tz" defaultValue={u.tz} className="u-input" /></label>
+          <label className="flex items-center gap-3"><input type="checkbox" name="paused" defaultChecked={!!s.paused} className="w-5 h-5" /><span>pause the drops for now (you can still text me)</span></label>
+          <div><button className="u-btn">save</button></div>
+        </form>
+      </Fade>
+      <Fade delay={0.2} className="u-muted text-sm mt-8 max-w-xl">your number is the login. text me <b>login</b> any time for a fresh link. spent today: ${Number(m.spend_today).toFixed(2)}.</Fade>
+    </UserShell>
   );
 }
