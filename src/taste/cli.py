@@ -1,5 +1,6 @@
 import argparse
 import json
+import os
 import pathlib
 import subprocess
 import sys
@@ -14,7 +15,8 @@ PLIST_PATH = pathlib.Path.home() / "Library/LaunchAgents" / f"{PLIST_NAME}.plist
 def main():
     ap = argparse.ArgumentParser(prog="taste")
     sub = ap.add_subparsers(dest="cmd", required=True)
-    sub.add_parser("run", help="run the daemon in the foreground")
+    sub.add_parser("run", help="run the daemon in the foreground (local mode, or relay mode if TASTE_SERVER_URL is set)")
+    sub.add_parser("relay", help="run in relay mode against the server")
     p = sub.add_parser("ingest", help="save a url without iMessage"); p.add_argument("url"); p.add_argument("--note", default=""); p.add_argument("--send", action="store_true")
     p = sub.add_parser("surface", help="send (or print) the next snippet"); p.add_argument("--dry", action="store_true"); p.add_argument("--kind", choices=["snippet", "observation"])
     p = sub.add_parser("profile", help="print the taste profile"); p.add_argument("--refresh", action="store_true")
@@ -29,7 +31,9 @@ def main():
     a = ap.parse_args()
     db.init()
 
-    if a.cmd == "run":
+    if a.cmd == "relay" or (a.cmd == "run" and os.environ.get("TASTE_SERVER_URL")):
+        from .relay import run; run()
+    elif a.cmd == "run":
         from .daemon import run; run()
     elif a.cmd == "ingest":
         from .daemon import ingest_url, say, setup_logging

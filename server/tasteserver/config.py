@@ -6,9 +6,12 @@ TRANSCRIBE_MODEL = os.environ.get("TASTE_TRANSCRIBE_MODEL", "gpt-4o-mini-transcr
 DASHBOARD_ORIGIN = os.environ.get("DASHBOARD_ORIGIN", "")
 
 # object storage (S3 compatible: Railway bucket or Cloudflare R2)
-S3_ENDPOINT = os.environ.get("AWS_ENDPOINT_URL", "")
-S3_BUCKET = os.environ.get("AWS_S3_BUCKET_NAME", "")
-S3_REGION = os.environ.get("AWS_DEFAULT_REGION", "auto")
+# Named S3_* on purpose: AWS_* names leak into Railway's own builder and break image pushes.
+S3_ENDPOINT = os.environ.get("S3_ENDPOINT_URL", "")
+S3_BUCKET = os.environ.get("S3_BUCKET", "")
+S3_REGION = os.environ.get("S3_REGION", "auto")
+S3_ACCESS_KEY = os.environ.get("S3_ACCESS_KEY_ID", "")
+S3_SECRET_KEY = os.environ.get("S3_SECRET_ACCESS_KEY", "")
 
 YTDLP_PROXY = os.environ.get("YTDLP_PROXY", "")
 YTDLP_COOKIES_B64 = os.environ.get("YTDLP_COOKIES_B64", "")

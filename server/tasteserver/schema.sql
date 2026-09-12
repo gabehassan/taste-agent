@@ -93,7 +93,7 @@ CREATE TABLE IF NOT EXISTS items (
     setweight(to_tsvector('english', coalesce(title, '')), 'A') ||
     setweight(to_tsvector('english', coalesce(summary, '')), 'B') ||
     setweight(to_tsvector('english', coalesce(note, '')), 'B') ||
-    setweight(to_tsvector('english', array_to_string(tags, ' ')), 'B') ||
+    setweight(array_to_tsvector(tags), 'B') ||
     setweight(to_tsvector('english', left(coalesce(raw_text, ''), 20000)), 'C')
   ) STORED
 );

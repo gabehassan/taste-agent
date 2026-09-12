@@ -1,7 +1,7 @@
 import boto3
 from botocore.config import Config
 
-from .config import S3_BUCKET, S3_ENDPOINT, S3_REGION
+from .config import S3_ACCESS_KEY, S3_BUCKET, S3_ENDPOINT, S3_REGION, S3_SECRET_KEY
 
 _client = None
 
@@ -10,7 +10,8 @@ def client():
     global _client
     if _client is None:
         _client = boto3.client("s3", endpoint_url=S3_ENDPOINT or None, region_name=S3_REGION,
-                               config=Config(signature_version="s3v4", s3={"addressing_style": "path"}))
+                               aws_access_key_id=S3_ACCESS_KEY or None, aws_secret_access_key=S3_SECRET_KEY or None,
+                               config=Config(signature_version="s3v4", s3={"addressing_style": "virtual"}))
     return _client
 
 

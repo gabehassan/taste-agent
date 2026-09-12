@@ -3,6 +3,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg ca-certi
 WORKDIR /app
 COPY pyproject.toml ./
 COPY tasteserver ./tasteserver
+COPY start.sh ./start.sh
 RUN pip install --no-cache-dir .
 ENV PYTHONUNBUFFERED=1
-CMD ["uvicorn", "tasteserver.api:app", "--host", "0.0.0.0", "--port", "8080"]
+CMD ["./start.sh"]

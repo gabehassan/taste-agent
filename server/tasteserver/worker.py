@@ -6,6 +6,7 @@ import threading
 import time
 
 from . import db, handlers, ratelimit
+from .netguard import Blocked
 from .config import WORKER_CONCURRENCY
 from .connections import sync_all_due
 
@@ -30,7 +31,7 @@ def job_loop(n):
             db.finish_job(job["id"], True)
             log.info("job %s %s done in %.1fs", job["id"], job["type"], time.time() - t0)
         except Exception as e:
-            retry = job["attempts"] < MAX_ATTEMPTS
+            retry = job["attempts"] < MAX_ATTEMPTS and not isinstance(e, Blocked)
             log.exception("job %s %s failed (attempt %s)", job["id"], job["type"], job["attempts"])
             db.finish_job(job["id"], False, error=f"{type(e).__name__}: {e}", retry_in=60 * job["attempts"] if retry else None)
 
