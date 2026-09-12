@@ -44,7 +44,7 @@ export default function Block({ it, rel, index = 0 }: { it: any; rel: string; in
           <div className="text-[13px] leading-snug truncate">{it.title || it.url}</div>
           <div className="mono u-faint ml-auto shrink-0">{rel}</div>
         </div>
-        <div className="mono u-faint">{it.kind}{it.status === "read" ? " · read" : ""}{it.status === "pending" ? " · reading" : ""}</div>
+        {(it.status === "read" || it.status === "pending" || it.read_minutes > 12) && <div className="mono u-faint">{it.status === "read" ? "finished" : it.status === "pending" ? "still reading it" : `${it.read_minutes} min`}</div>}
       </Link>
     </motion.div>
   );

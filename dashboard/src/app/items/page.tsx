@@ -15,14 +15,14 @@ export default async function Items({ searchParams }: { searchParams: Promise<{ 
     <UserShell name={m.user.name || ""}>
       <Fade>
         <div className="flex flex-wrap items-baseline gap-x-6 gap-y-3 mb-8">
-          <h1 className="display text-[28px]">{q ? q : "blocks"} <span className="mono u-faint align-middle ml-1">{q ? items.length : total}</span></h1>
+          <h1 className="display text-[28px]">{q ? q : "everything"} <span className="mono u-faint align-middle ml-1">{q ? items.length : total}</span></h1>
           <div className="flex gap-4 text-sm">
             {FILTERS.map(([v, l]) => <a key={v} href={v ? `/items?status=${v}` : "/items"} className="hover:underline underline-offset-4" style={{ opacity: (status || "") === v ? 1 : 0.45 }}>{l}</a>)}
           </div>
           <form className="ml-auto w-64"><input name="q" placeholder="search" defaultValue={q} className="u-input" style={{ padding: "6px 10px", fontSize: 13 }} /></form>
         </div>
         <form action={saveUrl} className="flex gap-2 mb-10 max-w-2xl">
-          <input name="url" placeholder="paste a link to add a block" required className="u-input" style={{ padding: "8px 10px", fontSize: 13 }} />
+          <input name="url" placeholder="paste a link to save it here" required className="u-input" style={{ padding: "8px 10px", fontSize: 13 }} />
           <input name="note" placeholder="note" className="u-input" style={{ padding: "8px 10px", fontSize: 13, width: 180 }} />
           <button className="u-btn">add</button>
         </form>

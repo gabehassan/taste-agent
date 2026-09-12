@@ -194,9 +194,19 @@ def ack(mid: int, body: Ack, request: Request, p: Principal = Depends(require("t
 def me(request: Request, p: Principal = Depends(require("user", "transport"))):
     u = target_user(request, p)
     from .scheduler import todays_plan
-    return {"user": _clean(u), "scopes": sorted(p.scopes), "spend_today": db.spend(u["id"], 1),
-            "plan": todays_plan(u), "counts": {"items": db.count_items(u["id"]), "unread": db.count_items(u["id"], "unread")},
-            "one_liner": (db.latest_profile(u["id"]) or {}).get("one_liner")}
+    uid = u["id"]
+    streak = db.q("""WITH d AS (SELECT DISTINCT (created_at AT TIME ZONE %s)::date AS day FROM messages WHERE user_id = %s AND direction = 'in')
+                     SELECT COUNT(*) AS n FROM (SELECT day, (CURRENT_DATE - day) - ROW_NUMBER() OVER (ORDER BY day DESC) AS g FROM d) x
+                     WHERE g IN (-1, 0) AND day >= CURRENT_DATE - 60""", (u.get("tz") or "UTC", uid), one=True)["n"]
+    unread_minutes = db.q("SELECT COALESCE(SUM(read_minutes), 0) AS m FROM items WHERE user_id = %s AND status = 'unread'", (uid,), one=True)["m"]
+    forgotten = db.q("""SELECT id, title, kind, url, created_at, meta FROM items WHERE user_id = %s AND status = 'unread' AND surfaced_count = 0
+                        AND created_at < now() - interval '5 days' ORDER BY created_at ASC LIMIT 1""", (uid,), one=True)
+    first = db.q("SELECT MIN(created_at) AS t FROM items WHERE user_id = %s", (uid,), one=True)["t"]
+    return {"user": _clean(u), "scopes": sorted(p.scopes), "spend_today": db.spend(uid, 1),
+            "plan": todays_plan(u), "counts": {"items": db.count_items(uid), "unread": db.count_items(uid, "unread"), "read": db.count_items(uid, "read")},
+            "one_liner": (db.latest_profile(uid) or {}).get("one_liner"),
+            "streak_days": int(streak or 0), "unread_minutes": int(unread_minutes or 0), "forgotten": _clean(forgotten) if forgotten else None,
+            "since": first}
 
 
 class MeSettings(BaseModel):

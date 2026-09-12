@@ -2,7 +2,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 
-const NAV = [["/", "index"], ["/items", "blocks"], ["/taste", "taste"], ["/memory", "memory"], ["/connections", "sources"], ["/settings", "settings"]];
+const NAV = [["/", "home"], ["/items", "everything"], ["/taste", "taste"], ["/memory", "memory"], ["/connections", "sources"], ["/settings", "settings"]];
 
 export default function Nav({ name }: { name: string }) {
   const path = usePathname();
