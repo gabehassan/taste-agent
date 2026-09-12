@@ -8,7 +8,7 @@ from pydantic import BaseModel, Field
 from . import db
 from .config import MODEL
 from .media import image_b64
-from .prompts import copy as C, field as F, prompt as PR, style as STYLE, tool as TOOL
+from .prompts import field as F, prompt as PR, style as STYLE, tool as TOOL
 
 _client = None
 
