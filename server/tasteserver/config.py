@@ -27,7 +27,6 @@ YTDLP_PROXY = os.environ.get("YTDLP_PROXY", "")
 YTDLP_COOKIES_B64 = os.environ.get("YTDLP_COOKIES_B64", "")
 
 WORKER_CONCURRENCY = int(os.environ.get("WORKER_CONCURRENCY", "2"))
-JOB_TIMEOUT_SECONDS = int(os.environ.get("JOB_TIMEOUT_SECONDS", "300"))
 
 # hard limits (not user-tunable)
 MAX_BODY_BYTES = 8 * 1024 * 1024
