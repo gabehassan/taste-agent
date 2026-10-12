@@ -8,6 +8,7 @@ import json
 import os
 import pathlib
 import re
+import socket
 import unittest
 import uuid
 from unittest.mock import patch
@@ -61,6 +62,41 @@ class PureTests(unittest.TestCase):
             blooio.send_text(PHONE, "hello", idempotency_key="stable-key", from_number=OTHER)
         self.assertEqual(requests[0].headers["Idempotency-Key"], "stable-key")
         self.assertIn(OTHER, requests[0].content.decode())
+
+
+class NetguardTests(unittest.TestCase):
+    def addr(self, ip):
+        family = socket.AF_INET6 if ":" in ip else socket.AF_INET
+        return [(family, socket.SOCK_STREAM, 6, "", (ip, 443))]
+
+    def test_private_and_special_ranges_blocked(self):
+        from tasteserver import netguard
+        for ip in ["127.0.0.1", "10.1.2.3", "169.254.169.254", "100.100.100.200", "100.64.0.1", "0.0.0.0",
+                   "::1", "fd12::1", "::ffff:127.0.0.1", "::ffff:10.0.0.1", "fe80::1%en0"]:
+            with patch.object(netguard.socket, "getaddrinfo", return_value=self.addr(ip)):
+                with self.assertRaises(netguard.Blocked, msg=ip):
+                    netguard.check_url("https://example.com/")
+        with patch.object(netguard.socket, "getaddrinfo", return_value=self.addr("93.184.215.14")):
+            self.assertEqual(netguard.check_url("https://example.com/"), "https://example.com/")
+        for url in ["file:///etc/passwd", "http://localhost/", "http://db.railway.internal/", "http://example.com:5432/"]:
+            with self.assertRaises(netguard.Blocked, msg=url):
+                netguard.check_url(url)
+
+    def test_rebinding_after_check_is_refused_at_connect(self):
+        from tasteserver import netguard
+        answers = [self.addr("93.184.215.14"), self.addr("127.0.0.1")]
+        with patch.object(netguard.socket, "getaddrinfo", side_effect=lambda *a, **k: answers.pop(0)):
+            with self.assertRaises(netguard.Blocked):
+                netguard.get("http://rebind.example/")
+
+    def test_lookalike_hosts_do_not_reach_ytdlp(self):
+        from tasteserver.fetch import classify
+        self.assertEqual(classify("https://www.tiktok.com/@a/video/1"), "tiktok")
+        self.assertEqual(classify("https://vm.tiktok.com/x"), "tiktok")
+        self.assertEqual(classify("https://tiktok.com.evil.example/v"), "article")
+        self.assertEqual(classify("https://eviltiktok.com/v"), "article")
+        self.assertEqual(classify("https://notinstagram.com/p/x"), "article")
+        self.assertEqual(classify("https://old.reddit.com/r/x/comments/abc"), "reddit")
 
 
 class ClientIpTests(unittest.TestCase):

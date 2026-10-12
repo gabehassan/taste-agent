@@ -45,21 +45,26 @@ def canonical(url):
     return urlunparse((p.scheme or "https", host, path, "", urlencode(qs), ""))
 
 
+def _on(host, domain):
+    return host == domain or host.endswith("." + domain)
+
+
 def classify(url):
-    host = urlparse(url).netloc.lower().removeprefix("www.").removeprefix("m.")
+    # Exact domain matching matters: tiktok/youtube/instagram URLs go to yt-dlp, which does its own networking.
+    host = (urlparse(url).hostname or "").removeprefix("www.").removeprefix("m.")
     if host in ("x.com", "twitter.com", "fxtwitter.com", "vxtwitter.com", "fixupx.com"):
         return "tweet"
-    if host.endswith("reddit.com") or host == "redd.it":
+    if _on(host, "reddit.com") or host == "redd.it":
         return "reddit"
-    if "tiktok.com" in host:
+    if _on(host, "tiktok.com"):
         return "tiktok"
     if host in ("youtube.com", "youtu.be", "music.youtube.com"):
         return "youtube"
-    if host.endswith("instagram.com"):
+    if _on(host, "instagram.com"):
         return "instagram"
-    if host.endswith("goodreads.com") or (host.endswith("amazon.com") and "/dp/" in url):
+    if _on(host, "goodreads.com") or (_on(host, "amazon.com") and "/dp/" in url):
         return "book"
-    if host.endswith("letterboxd.com") and "/film/" in url:
+    if _on(host, "letterboxd.com") and "/film/" in url:
         return "film"
     if url.lower().endswith(".pdf"):
         return "pdf"
