@@ -1,8 +1,10 @@
 import datetime as dt
+import hmac
 
-from fastapi import HTTPException
+from fastapi import HTTPException, Request
 
 from . import db
+from .config import CLIENT_IP_HEADER, DASHBOARD_PROXY_SECRET
 
 
 def hit(key, limit, window_seconds):
@@ -29,3 +31,17 @@ def check(key, limit, window_seconds):
 
 def cleanup():
     db.q("DELETE FROM rate_limits WHERE window_start < now() - interval '2 days'")
+
+
+def client_ip(request: Request):
+    """The address to rate limit on. Never read from X-Forwarded-For, which any client can set."""
+    if DASHBOARD_PROXY_SECRET:
+        forwarded = request.headers.get("x-taste-client-ip", "").strip()
+        secret = request.headers.get("x-taste-proxy-secret", "")
+        if forwarded and hmac.compare_digest(secret.encode(), DASHBOARD_PROXY_SECRET.encode()):
+            return forwarded[:64]
+    if CLIENT_IP_HEADER:
+        edge = request.headers.get(CLIENT_IP_HEADER, "").strip()
+        if edge:
+            return edge[:64]
+    return request.client.host if request.client else "unknown"

@@ -1,14 +1,12 @@
 "use server";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
-import { headers } from "next/headers";
 import { api } from "@/lib/api";
+import { clientIp } from "@/lib/client-ip";
 import { clearSession, requireSession, loginAllowed, passwordOk, setCurrentUserId, setSession } from "@/lib/session";
 
 export async function login(formData: FormData) {
-  const h = await headers();
-  const ip = h.get("x-forwarded-for")?.split(",")[0].trim() || "?";
-  if (!loginAllowed(ip)) redirect("/admin/login?e=slow");
+  if (!loginAllowed((await clientIp()) ?? "unknown")) redirect("/admin/login?e=slow");
   if (!passwordOk(String(formData.get("password") || ""))) redirect("/admin/login?e=bad");
   await setSession();
   redirect("/admin");

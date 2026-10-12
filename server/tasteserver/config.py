@@ -6,6 +6,12 @@ TRANSCRIBE_MODEL = os.environ.get("TASTE_TRANSCRIBE_MODEL", "gpt-4o-mini-transcr
 DASHBOARD_ORIGIN = os.environ.get("DASHBOARD_ORIGIN", "")
 DASHBOARD_URL = os.environ.get("DASHBOARD_URL", "http://localhost:3000")
 
+# Rate limits key on the caller's address. X-Forwarded-For is client-controlled, so the address comes from a header
+# the platform edge overwrites (Railway sets X-Real-IP). Set CLIENT_IP_HEADER="" to use the socket address.
+CLIENT_IP_HEADER = os.environ.get("CLIENT_IP_HEADER", "x-real-ip").lower()
+# The dashboard calls the API server-side, so it forwards the browser's address alongside this shared secret.
+DASHBOARD_PROXY_SECRET = os.environ.get("DASHBOARD_PROXY_SECRET", "")
+
 # object storage (S3 compatible: Railway bucket or Cloudflare R2)
 # Named S3_* on purpose: AWS_* names leak into Railway's own builder and break image pushes.
 S3_ENDPOINT = os.environ.get("S3_ENDPOINT_URL", "")

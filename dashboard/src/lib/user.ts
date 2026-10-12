@@ -1,6 +1,7 @@
 import "server-only";
-import { cookies, headers } from "next/headers";
+import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
+import { forwardedFor } from "@/lib/client-ip";
 
 const BASE = process.env.TASTE_API_URL!;
 const COOKIE = "taste_user";
@@ -30,7 +31,7 @@ export async function userApi<T = any>(path: string, init: RequestInit = {}, key
   if (!k) redirect("/login");
   const res = await fetch(new URL(path, BASE), {
     ...init,
-    headers: { Authorization: `Bearer ${k}`, "Content-Type": "application/json", ...(init.headers || {}) },
+    headers: { Authorization: `Bearer ${k}`, "Content-Type": "application/json", ...(await forwardedFor()), ...(init.headers || {}) },
     cache: "no-store",
   });
   if (res.status === 401 || res.status === 403) redirect("/login?e=expired");
@@ -43,9 +44,7 @@ export async function userApi<T = any>(path: string, init: RequestInit = {}, key
 }
 
 export async function publicApi<T = any>(path: string, body: unknown): Promise<T> {
-  const incoming = await headers();
-  const ip = incoming.get("x-forwarded-for")?.split(",")[0].trim();
-  const res = await fetch(new URL(path, BASE), { method: "POST", headers: { "Content-Type": "application/json", ...(ip ? { "X-Forwarded-For": ip } : {}) }, body: JSON.stringify(body), cache: "no-store" });
+  const res = await fetch(new URL(path, BASE), { method: "POST", headers: { "Content-Type": "application/json", ...(await forwardedFor()) }, body: JSON.stringify(body), cache: "no-store" });
   if (!res.ok) {
     let msg = res.statusText;
     try { msg = (await res.json()).detail ?? msg; } catch {}

@@ -54,9 +54,8 @@ async def guard(request: Request, call_next):
         cl = request.headers.get("content-length")
         if cl and int(cl) > MAX_BODY_BYTES:
             return JSONResponse({"detail": "body too large"}, 413)
-        ip = (request.headers.get("x-forwarded-for", "").split(",")[0].strip() or (request.client.host if request.client else "?"))
         try:
-            ratelimit.hit(f"ip:{ip}", int(db.setting("rate_ip_per_min")), 60)
+            ratelimit.hit(f"ip:{ratelimit.client_ip(request)}", int(db.setting("rate_ip_per_min")), 60)
         except HTTPException as e:
             return JSONResponse({"detail": e.detail}, 429, headers=e.headers)
     resp = await call_next(request)
@@ -650,8 +649,7 @@ class AuthRequest(BaseModel):
 @app.post("/v1/auth/request")
 def auth_request(body: AuthRequest, request: Request):
     """Keep account existence private; the UI never promises a text was sent."""
-    ip = request.headers.get("x-forwarded-for", "").split(",")[0].strip() or "?"
-    ratelimit.hit(f"auth_ip:{ip}", 10, 3600)
+    ratelimit.hit(f"auth_ip:{ratelimit.client_ip(request)}", 10, 3600)
     phone = login.phone_number(body.phone)
     ratelimit.hit(f"auth_phone:{phone}", 3, 3600)
     h = db.q("SELECT * FROM handles WHERE address = %s", (phone,), one=True)
@@ -669,7 +667,7 @@ class AuthExchange(BaseModel):
 
 @app.post("/v1/auth/exchange")
 def auth_exchange(body: AuthExchange, request: Request):
-    ip = request.headers.get("x-forwarded-for", "").split(",")[0].strip() or "?"
+    ip = ratelimit.client_ip(request)
     ratelimit.hit(f"auth_x:{ip}", 30, 3600)
     return login.exchange(body.phone, body.token, ip)
 

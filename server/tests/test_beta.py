@@ -63,6 +63,28 @@ class PureTests(unittest.TestCase):
         self.assertIn(OTHER, requests[0].content.decode())
 
 
+class ClientIpTests(unittest.TestCase):
+    def request(self, headers):
+        from starlette.requests import Request
+        scope = {"type": "http", "headers": [(k.lower().encode(), v.encode()) for k, v in headers.items()], "client": ("10.0.0.9", 1234)}
+        return Request(scope)
+
+    def test_forwarded_for_is_never_trusted(self):
+        from tasteserver import ratelimit
+        self.assertEqual(ratelimit.client_ip(self.request({"X-Forwarded-For": "1.2.3.4", "X-Real-IP": "5.6.7.8"})), "5.6.7.8")
+        self.assertEqual(ratelimit.client_ip(self.request({"X-Forwarded-For": "1.2.3.4"})), "10.0.0.9")
+
+    def test_dashboard_forwarding_needs_the_secret(self):
+        from tasteserver import ratelimit
+        with patch.object(ratelimit, "DASHBOARD_PROXY_SECRET", "s3cret"):
+            forged = {"X-Taste-Client-IP": "1.1.1.1", "X-Taste-Proxy-Secret": "guess", "X-Real-IP": "5.6.7.8"}
+            self.assertEqual(ratelimit.client_ip(self.request(forged)), "5.6.7.8")
+            signed = {**forged, "X-Taste-Proxy-Secret": "s3cret"}
+            self.assertEqual(ratelimit.client_ip(self.request(signed)), "1.1.1.1")
+        with patch.object(ratelimit, "DASHBOARD_PROXY_SECRET", ""):
+            self.assertEqual(ratelimit.client_ip(self.request({"X-Taste-Client-IP": "1.1.1.1", "X-Taste-Proxy-Secret": ""})), "10.0.0.9")
+
+
 @unittest.skipUnless(os.getenv("TEST_DATABASE_URL"), "set TEST_DATABASE_URL for isolated PostgreSQL integration tests")
 class DatabaseTests(unittest.TestCase):
     @classmethod

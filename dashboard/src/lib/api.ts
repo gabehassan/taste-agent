@@ -1,4 +1,5 @@
 import "server-only";
+import { forwardedFor } from "@/lib/client-ip";
 import { requireSession } from "@/lib/session";
 
 const BASE = process.env.TASTE_API_URL!;
@@ -17,7 +18,7 @@ export async function api<T = any>(path: string, init: RequestInit & { userId?: 
   if (userId) url.searchParams.set("user_id", userId);
   const res = await fetch(url, {
     ...rest,
-    headers: { Authorization: `Bearer ${KEY}`, "Content-Type": "application/json", ...(rest.headers || {}) },
+    headers: { Authorization: `Bearer ${KEY}`, "Content-Type": "application/json", ...(await forwardedFor()), ...(rest.headers || {}) },
     cache: "no-store",
   });
   if (!res.ok) {
