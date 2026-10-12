@@ -18,7 +18,7 @@ from pydantic import BaseModel, Field
 
 from . import auth, blooio, db, login, memory, ratelimit, storage
 from .auth import Principal, require, target_user
-from .config import DASHBOARD_ORIGIN, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS, MAX_BODY_BYTES
+from .config import DASHBOARD_ORIGIN, DEFAULT_TZ, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS, MAX_BODY_BYTES
 from .connections import TYPES as CONNECTION_TYPES
 
 log = logging.getLogger("taste.api")
@@ -601,8 +601,8 @@ def _onboard_unknown(ev):
         if ratelimit.check(f"unknown_reply:{sender}", 1, 86400):
             blooio.send_text(sender, __import__("tasteserver.prompts", fromlist=["copy"]).copy("invite_only"), idempotency_key=f"invite-only:{sender}:{ev.get('event_id')}")
         return
-    u = db.q("INSERT INTO users(name, email, role, transport, onboarded_at) VALUES (%s, %s, %s, 'blooio', now()) RETURNING *",
-             (None, (inv or {}).get("email"), (inv or {}).get("role", "user")), one=True)
+    u = db.q("INSERT INTO users(name, email, role, tz, transport, onboarded_at) VALUES (%s, %s, %s, %s, 'blooio', now()) RETURNING *",
+             (None, (inv or {}).get("email"), (inv or {}).get("role", "user"), DEFAULT_TZ), one=True)
     db.q("INSERT INTO handles(user_id, kind, address, capabilities, last_seen_at) VALUES (%s, 'imessage', %s, %s, now())",
          (u["id"], sender, db.J(["react", "typing"])))
     if inv:
@@ -771,7 +771,7 @@ class UserBody(BaseModel):
     email: Optional[str] = None
     name: Optional[str] = None
     role: str = "user"
-    tz: str = "America/Detroit"
+    tz: str = DEFAULT_TZ
     handles: list[str] = Field(default_factory=list)
     settings: dict = Field(default_factory=dict)
 

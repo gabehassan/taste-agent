@@ -6,7 +6,7 @@ CREATE TABLE IF NOT EXISTS users (
   name TEXT,
   role TEXT NOT NULL DEFAULT 'user',
   status TEXT NOT NULL DEFAULT 'active',
-  tz TEXT NOT NULL DEFAULT 'America/Detroit',
+  tz TEXT NOT NULL DEFAULT 'UTC',
   settings JSONB NOT NULL DEFAULT '{}'::jsonb,
   state JSONB NOT NULL DEFAULT '{}'::jsonb,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()

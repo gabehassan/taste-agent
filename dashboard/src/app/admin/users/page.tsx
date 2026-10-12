@@ -42,7 +42,7 @@ export default async function Users() {
       <form action={createUser} className="card flex gap-2 flex-wrap items-end">
         <div className="w-full font-medium">add user</div>
         <input name="name" placeholder="name" required /><input name="email" placeholder="email" type="email" /><input name="handles" placeholder="imessage handles, comma separated" className="w-80" />
-        <select name="role"><option value="user">user</option><option value="admin">admin</option></select><input name="tz" defaultValue="America/Detroit" className="w-40" /><button>create</button>
+        <select name="role"><option value="user">user</option><option value="admin">admin</option></select><input name="tz" defaultValue="UTC" className="w-40" /><button>create</button>
       </form>
     </Shell>
   );

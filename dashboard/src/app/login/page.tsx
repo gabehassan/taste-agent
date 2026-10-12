@@ -32,7 +32,7 @@ export default async function Login({ searchParams }: { searchParams: Promise<{ 
         ) : (
           <form action={requestLink} className="flex flex-col gap-3">
             <label className="mono u-muted" htmlFor="phone">the number you use to text taste</label>
-            <input id="phone" name="phone" type="tel" inputMode="tel" autoComplete="tel" placeholder="+1 313 555 0123" maxLength={40} required autoFocus className="u-input" />
+            <input id="phone" name="phone" type="tel" inputMode="tel" autoComplete="tel" placeholder="+1 202 555 0143" maxLength={40} required autoFocus className="u-input" />
             {e && <div role="alert" className="text-sm u-muted">{e === "expired" ? "that session ended. get a fresh code." : e === "phone" ? "enter your phone number with its country code." : e === "unavailable" ? "couldn't request a code. try again shortly." : "too many requests. wait a bit before trying again."}</div>}
             <button className="u-btn">text me a code</button>
             <button formAction={enterExistingCode} className="u-btn soft">I already have a code</button>

@@ -30,4 +30,4 @@ export async function api<T = any>(path: string, init: RequestInit & { userId?: 
 }
 
 export const fmtMoney = (n: number | string | null | undefined) => `$${Number(n ?? 0).toFixed(2)}`;
-export const fmtDate = (s: string | null | undefined) => (s ? new Date(s).toLocaleString("en-US", { timeZone: "America/Detroit" }) : "");
+export const fmtDate = (s: string | null | undefined) => (s ? new Date(s).toLocaleString("en-US", { timeZone: process.env.DASHBOARD_TZ || "UTC" }) : "");

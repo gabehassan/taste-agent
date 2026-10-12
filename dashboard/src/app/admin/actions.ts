@@ -22,7 +22,7 @@ export async function pickUser(formData: FormData) {
 
 export async function createUser(formData: FormData) {
   await api("/v1/admin/users", { method: "POST", body: JSON.stringify({
-    name: formData.get("name"), email: formData.get("email") || null, role: formData.get("role") || "user", tz: formData.get("tz") || "America/Detroit",
+    name: formData.get("name"), email: formData.get("email") || null, role: formData.get("role") || "user", tz: formData.get("tz") || "UTC",
     handles: String(formData.get("handles") || "").split(",").map(s => s.trim()).filter(Boolean),
   }) });
   revalidatePath("/admin/users");

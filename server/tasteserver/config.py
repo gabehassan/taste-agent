@@ -4,7 +4,10 @@ DATABASE_URL = os.environ["DATABASE_URL"]
 MODEL = os.environ.get("TASTE_MODEL", "gpt-5.6-luna")
 TRANSCRIBE_MODEL = os.environ.get("TASTE_TRANSCRIBE_MODEL", "gpt-4o-mini-transcribe")
 DASHBOARD_ORIGIN = os.environ.get("DASHBOARD_ORIGIN", "")
+# Public dashboard address, used for links in texts.
 DASHBOARD_URL = os.environ.get("DASHBOARD_URL", "http://localhost:3000")
+# Time zone for new users until they set their own. Schedules and quiet hours use it.
+DEFAULT_TZ = os.environ.get("TASTE_DEFAULT_TZ", "UTC")
 
 # Rate limits key on the caller's address. X-Forwarded-For is client-controlled, so the address comes from a header
 # the platform edge overwrites (Railway sets X-Real-IP). Set CLIENT_IP_HEADER="" to use the socket address.

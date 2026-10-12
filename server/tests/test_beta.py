@@ -26,8 +26,8 @@ from fastapi.testclient import TestClient
 from pydantic import ValidationError
 from tasteserver import api, blooio, db, dispatch, handlers, login, memory, scheduler, brain
 
-PHONE = "+13135550123"
-OTHER = "+13135550124"
+PHONE = "+12025550143"
+OTHER = "+12025550144"
 
 
 def event(text="hello", sender=PHONE, eid=None, attachments=None):
@@ -39,10 +39,10 @@ class PureTests(unittest.TestCase):
     def test_missing_phone_rejected(self):
         with self.assertRaises(ValidationError):
             api.AuthExchange(token="123456")
-        for value in ["", "abc3135550123", "+1+3135550123", "123"]:
+        for value in ["", "abc2025550143", "+1+2025550143", "123"]:
             with self.assertRaises(HTTPException):
                 login.phone_number(value)
-        self.assertEqual(login.phone_number("(313) 555-0123"), PHONE)
+        self.assertEqual(login.phone_number("(202) 555-0143"), PHONE)
 
     def test_retry_policy(self):
         def error(status, code, headers=None):

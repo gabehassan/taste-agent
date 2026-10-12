@@ -2,16 +2,17 @@
 import datetime as dt
 import random
 import re
-from zoneinfo import ZoneInfo
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from . import db, memory
+from .config import DEFAULT_TZ
 
 
 def _now(user):
     try:
-        return dt.datetime.now(ZoneInfo(user.get("tz") or "America/Detroit"))
-    except Exception:
-        return dt.datetime.now(ZoneInfo("America/Detroit"))
+        return dt.datetime.now(ZoneInfo(user.get("tz") or DEFAULT_TZ))
+    except (ValueError, ZoneInfoNotFoundError):
+        return dt.datetime.now(ZoneInfo(DEFAULT_TZ))
 
 
 def todays_plan(user):

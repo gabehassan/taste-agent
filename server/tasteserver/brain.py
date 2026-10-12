@@ -8,6 +8,7 @@ from pydantic import BaseModel, Field
 from . import db, memory
 from .config import MODEL
 from .media import image_b64
+from .scheduler import _now
 from .prompts import field as F, prompt as PR, style as STYLE, tool as TOOL
 
 _client = None
@@ -268,7 +269,7 @@ class ProactiveChoice(BaseModel):
 
 def proactive_choice(user, candidates):
     profile = db.latest_profile(user["id"])
-    data = {"local_time": __import__("datetime").datetime.now(__import__("zoneinfo").ZoneInfo(user.get("tz") or "America/Detroit")).isoformat(),
+    data = {"local_time": _now(user).isoformat(),
             "preferences": json.loads(memory.context(user["id"])),
             "inferred_profile": (profile["text"] or "")[:4000] if profile else "",
             "recent_conversation": db.recent_chat(user["id"], n=6, max_age_hours=72),
