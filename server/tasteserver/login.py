@@ -1,4 +1,5 @@
 """Phone-bound, single-use login challenges shared by web and message login."""
+
 import hashlib
 import hmac
 import re
@@ -26,26 +27,38 @@ def _digest(phone, code):
 
 def issue(user, phone=None, *, deliver=True):
     if phone is None:
-        h = db.q("SELECT address FROM handles WHERE user_id = %s AND address LIKE '+%%' ORDER BY last_seen_at DESC NULLS LAST LIMIT 1",
-                 (user["id"],), one=True)
+        h = db.q(
+            "SELECT address FROM handles WHERE user_id = %s AND address LIKE '+%%' ORDER BY last_seen_at DESC NULLS LAST LIMIT 1",
+            (user["id"],),
+            one=True,
+        )
         phone = h["address"] if h else ""
     phone = phone_number(phone)
     ratelimit.hit(f"login_issue:{phone}", 3, 3600)
     with db.transaction():
-        active = db.q("SELECT id FROM users WHERE id = %s AND status = 'active' FOR NO KEY UPDATE", (user["id"],), one=True)
+        active = db.q(
+            "SELECT id FROM users WHERE id = %s AND status = 'active' FOR NO KEY UPDATE", (user["id"],), one=True
+        )
         handle = db.q("SELECT id FROM handles WHERE user_id = %s AND address = %s", (user["id"], phone), one=True)
         if not active or not handle:
             raise HTTPException(401, "unable to request a code")
         code = str(secrets.randbelow(900000) + 100000)
         db.q("UPDATE login_challenges SET used_at = now() WHERE user_id = %s AND used_at IS NULL", (user["id"],))
-        challenge = db.q("INSERT INTO login_challenges(user_id, phone, code_hash, expires_at) VALUES (%s, %s, %s, now() + interval '10 minutes') RETURNING id",
-                         (user["id"], phone, _digest(phone, code)), one=True)
+        challenge = db.q(
+            "INSERT INTO login_challenges(user_id, phone, code_hash, expires_at) VALUES (%s, %s, %s, now() + interval '10 minutes') RETURNING id",
+            (user["id"], phone, _digest(phone, code)),
+            one=True,
+        )
         if not deliver:
             db.audit(None, user["id"], "auth.owner_code", {"delivery": "operator console"})
             return code
         # Auth has its own limit; normal chat traffic must not silently drop login codes.
-        return db.queue_outbound(user["id"], C("login_code", code=code), handle_id=handle["id"],
-                                 meta={"to": phone, "login_challenge": str(challenge["id"])})
+        return db.queue_outbound(
+            user["id"],
+            C("login_code", code=code),
+            handle_id=handle["id"],
+            meta={"to": phone, "login_challenge": str(challenge["id"])},
+        )
 
 
 def exchange(phone, code, ip):
@@ -56,8 +69,12 @@ def exchange(phone, code, ip):
     ratelimit.hit(f"auth_xp:{phone}", 10, 3600)
     result = None
     with db.transaction():
-        t = db.q("""SELECT * FROM login_challenges WHERE phone = %s AND used_at IS NULL
-                    AND expires_at > now() ORDER BY created_at DESC LIMIT 1 FOR UPDATE""", (phone,), one=True)
+        t = db.q(
+            """SELECT * FROM login_challenges WHERE phone = %s AND used_at IS NULL
+                    AND expires_at > now() ORDER BY created_at DESC LIMIT 1 FOR UPDATE""",
+            (phone,),
+            one=True,
+        )
         if t and t["attempts"] < 5:
             if hmac.compare_digest(t["code_hash"], _digest(phone, code)):
                 user = db.q("SELECT id FROM users WHERE id = %s AND status = 'active'", (t["user_id"],), one=True)
@@ -76,11 +93,18 @@ def exchange(phone, code, ip):
 
 if __name__ == "__main__":
     import argparse
-    parser = argparse.ArgumentParser(description="Create a one-time dashboard code without sending a message. Requires server database access.")
+
+    parser = argparse.ArgumentParser(
+        description="Create a one-time dashboard code without sending a message. Requires server database access."
+    )
     parser.add_argument("phone")
     args = parser.parse_args()
     phone = phone_number(args.phone)
-    user = db.q("SELECT u.* FROM users u JOIN handles h ON h.user_id=u.id WHERE h.address=%s AND u.status='active'", (phone,), one=True)
+    user = db.q(
+        "SELECT u.* FROM users u JOIN handles h ON h.user_id=u.id WHERE h.address=%s AND u.status='active'",
+        (phone,),
+        one=True,
+    )
     if not user:
         parser.error("no active account for this phone")
     try:

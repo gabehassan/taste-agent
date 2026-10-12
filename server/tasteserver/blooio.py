@@ -1,11 +1,13 @@
 """Blooio transport: hosted iMessage number. Outbound via REST, inbound via signed webhook."""
+
+import contextlib
+import datetime as dt
 import hashlib
 import hmac
 import logging
 import os
 import re
 import time
-import datetime as dt
 from email.utils import parsedate_to_datetime
 from urllib.parse import quote
 
@@ -48,14 +50,20 @@ class SendError(RuntimeError):
             try:
                 self.retry_after = max(1, int(value))
             except ValueError:
-                try:
-                    self.retry_after = max(1, int((parsedate_to_datetime(value) - dt.datetime.now(dt.timezone.utc)).total_seconds()) + 1)
-                except (ValueError, TypeError, OverflowError):
-                    pass
+                with contextlib.suppress(ValueError, TypeError, OverflowError):
+                    self.retry_after = max(
+                        1, int((parsedate_to_datetime(value) - dt.datetime.now(dt.UTC)).total_seconds()) + 1
+                    )
         # Conversation/safety limits require recipient or operator action, not blind retries.
-        self.retryable = self.status == 408 or self.status >= 500 or (
-            self.status == 429 and self.retry_after is not None
-            and self.code in {"rate_limit_exceeded", "rate_limited", "too_many_requests"})
+        self.retryable = (
+            self.status == 408
+            or self.status >= 500
+            or (
+                self.status == 429
+                and self.retry_after is not None
+                and self.code in {"rate_limit_exceeded", "rate_limited", "too_many_requests"}
+            )
+        )
         super().__init__(f"blooio send {self.status}: {self.code or 'request failed'}")
 
 
@@ -98,7 +106,10 @@ def react(chat_id, message_id, reaction):
         return False
     r_ = reaction if reaction in REACTIONS or len(reaction) <= 2 else "love"
     with _c() as c:
-        r = c.post(f"/chats/{quote(chat_id, safe='')}/messages/{quote(message_id, safe='')}/reactions", json={"reaction": f"+{r_}"})
+        r = c.post(
+            f"/chats/{quote(chat_id, safe='')}/messages/{quote(message_id, safe='')}/reactions",
+            json={"reaction": f"+{r_}"},
+        )
     if r.status_code >= 300:
         log.info("react failed %s: %s", r.status_code, r.text[:160])
         return False
@@ -126,7 +137,9 @@ def parse_event(evt):
     """Normalise a Blooio webhook envelope into our inbound shape, or None if not for us."""
     t = evt.get("type", "")
     d = evt.get("data") or {}
-    if t == "message.received" or (t.startswith("message.") and d.get("direction") == "inbound" and d.get("kind") == "received"):
+    if t == "message.received" or (
+        t.startswith("message.") and d.get("direction") == "inbound" and d.get("kind") == "received"
+    ):
         sender = d.get("sender") or (d.get("contact") or {}).get("identifier") or ""
         atts = []
         for a in d.get("attachments") or []:
@@ -134,21 +147,40 @@ def parse_event(evt):
             ct = a.get("content_type") or a.get("mime_type") or ""
             if url:
                 atts.append({"url": url, "content_type": ct, "name": a.get("filename") or a.get("name") or "file"})
-        return {"kind": "text", "sender": normalize(sender), "text": d.get("text") or "", "message_id": d.get("message_id") or d.get("id"),
-                "chat_id": d.get("chat_id"), "attachments": atts, "event_id": evt.get("id")}
+        return {
+            "kind": "text",
+            "sender": normalize(sender),
+            "text": d.get("text") or "",
+            "message_id": d.get("message_id") or d.get("id"),
+            "chat_id": d.get("chat_id"),
+            "attachments": atts,
+            "event_id": evt.get("id"),
+        }
     if "reaction" in t:
         reaction = (d.get("reaction") or d.get("emoji") or "").lstrip("+")
         if not reaction or (d.get("reaction") or "").startswith("-"):
             return None
         sender = d.get("sender") or (d.get("contact") or {}).get("identifier") or ""
-        return {"kind": "reaction", "sender": normalize(sender), "reaction": reaction if reaction in REACTIONS else "love",
-                "target_message_id": d.get("target_message_id") or d.get("message_id"), "chat_id": d.get("chat_id"), "event_id": evt.get("id")}
+        return {
+            "kind": "reaction",
+            "sender": normalize(sender),
+            "reaction": reaction if reaction in REACTIONS else "love",
+            "target_message_id": d.get("target_message_id") or d.get("message_id"),
+            "chat_id": d.get("chat_id"),
+            "event_id": evt.get("id"),
+        }
     return None
 
 
 def split_bubbles(text, max_parts=3):
     """Paragraphs become separate bubbles, the way people text. Long or link-heavy texts stay whole."""
     parts = [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]
-    if len(parts) <= 1 or len(parts) > max_parts or any(len(p) > 320 for p in parts) or "http" in text and len(parts) > 2:
+    if (
+        len(parts) <= 1
+        or len(parts) > max_parts
+        or any(len(p) > 320 for p in parts)
+        or "http" in text
+        and len(parts) > 2
+    ):
         return [text]
     return parts

@@ -1,4 +1,5 @@
 """Loads prompts.toml (repo root of server/). Edit that file, not this one."""
+
 import pathlib
 import tomllib
 

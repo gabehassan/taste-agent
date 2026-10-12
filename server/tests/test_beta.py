@@ -1,10 +1,11 @@
 """Regression tests. TEST_DATABASE_URL creates and removes an isolated test schema.
 No model calls or real messages are made. Without it, only pure tests run.
 """
+
 import base64
 import concurrent.futures
-import hashlib
 import datetime as dt
+import hashlib
 import json
 import os
 import pathlib
@@ -18,23 +19,34 @@ os.environ.setdefault("DATABASE_URL", "postgresql://unused:unused@localhost/unus
 
 import httpx
 import psycopg
+from fastapi import HTTPException
+from fastapi.testclient import TestClient
 from psycopg import sql
 from psycopg.rows import dict_row
 from psycopg_pool import ConnectionPool
-from fastapi import HTTPException
-from fastapi.testclient import TestClient
 from pydantic import ValidationError
+
 from tasteserver import api, blooio, brain, db, dispatch, handlers, login, memory, scheduler, storage
 from tasteserver.config import MAX_BODY_BYTES
-from tasteserver.routes import auth as auth_routes, webhooks
+from tasteserver.routes import auth as auth_routes
+from tasteserver.routes import webhooks
 
 PHONE = "+12025550143"
 OTHER = "+12025550144"
 
 
 def event(text="hello", sender=PHONE, eid=None, attachments=None):
-    return {"id": eid or str(uuid.uuid4()), "type": "message.received", "data": {
-        "sender": sender, "text": text, "id": str(uuid.uuid4()), "chat_id": "chat_test", "attachments": attachments or []}}
+    return {
+        "id": eid or str(uuid.uuid4()),
+        "type": "message.received",
+        "data": {
+            "sender": sender,
+            "text": text,
+            "id": str(uuid.uuid4()),
+            "chat_id": "chat_test",
+            "attachments": attachments or [],
+        },
+    }
 
 
 class PureTests(unittest.TestCase):
@@ -49,6 +61,7 @@ class PureTests(unittest.TestCase):
     def test_retry_policy(self):
         def error(status, code, headers=None):
             return blooio.SendError(httpx.Response(status, json={"error": {"code": code}}, headers=headers))
+
         self.assertEqual(dispatch.retry_delay(error(503, "unavailable"), 1), 15)
         self.assertEqual(dispatch.retry_delay(error(429, "rate_limited", {"Retry-After": "60"}), 1), 60)
         self.assertIsNone(dispatch.retry_delay(error(429, "rate_limited"), 1))
@@ -58,10 +71,16 @@ class PureTests(unittest.TestCase):
 
     def test_idempotency_header_and_frozen_sender(self):
         requests = []
+
         def respond(request):
             requests.append(request)
             return httpx.Response(202, json={"id": "accepted"})
-        with patch.object(blooio, "_c", side_effect=lambda: httpx.Client(base_url="https://example.test", transport=httpx.MockTransport(respond))):
+
+        with patch.object(
+            blooio,
+            "_c",
+            side_effect=lambda: httpx.Client(base_url="https://example.test", transport=httpx.MockTransport(respond)),
+        ):
             blooio.send_text(PHONE, "hello", idempotency_key="stable-key", from_number=OTHER)
         self.assertEqual(requests[0].headers["Idempotency-Key"], "stable-key")
         self.assertIn(OTHER, requests[0].content.decode())
@@ -74,26 +93,49 @@ class NetguardTests(unittest.TestCase):
 
     def test_private_and_special_ranges_blocked(self):
         from tasteserver import netguard
-        for ip in ["127.0.0.1", "10.1.2.3", "169.254.169.254", "100.100.100.200", "100.64.0.1", "0.0.0.0",
-                   "::1", "fd12::1", "::ffff:127.0.0.1", "::ffff:10.0.0.1", "fe80::1%en0"]:
-            with patch.object(netguard.socket, "getaddrinfo", return_value=self.addr(ip)):
-                with self.assertRaises(netguard.Blocked, msg=ip):
-                    netguard.check_url("https://example.com/")
+
+        for ip in [
+            "127.0.0.1",
+            "10.1.2.3",
+            "169.254.169.254",
+            "100.100.100.200",
+            "100.64.0.1",
+            "0.0.0.0",
+            "::1",
+            "fd12::1",
+            "::ffff:127.0.0.1",
+            "::ffff:10.0.0.1",
+            "fe80::1%en0",
+        ]:
+            with (
+                patch.object(netguard.socket, "getaddrinfo", return_value=self.addr(ip)),
+                self.assertRaises(netguard.Blocked, msg=ip),
+            ):
+                netguard.check_url("https://example.com/")
         with patch.object(netguard.socket, "getaddrinfo", return_value=self.addr("93.184.215.14")):
             self.assertEqual(netguard.check_url("https://example.com/"), "https://example.com/")
-        for url in ["file:///etc/passwd", "http://localhost/", "http://db.railway.internal/", "http://example.com:5432/"]:
+        for url in [
+            "file:///etc/passwd",
+            "http://localhost/",
+            "http://db.railway.internal/",
+            "http://example.com:5432/",
+        ]:
             with self.assertRaises(netguard.Blocked, msg=url):
                 netguard.check_url(url)
 
     def test_rebinding_after_check_is_refused_at_connect(self):
         from tasteserver import netguard
+
         answers = [self.addr("93.184.215.14"), self.addr("127.0.0.1")]
-        with patch.object(netguard.socket, "getaddrinfo", side_effect=lambda *a, **k: answers.pop(0)):
-            with self.assertRaises(netguard.Blocked):
-                netguard.get("http://rebind.example/")
+        with (
+            patch.object(netguard.socket, "getaddrinfo", side_effect=lambda *a, **k: answers.pop(0)),
+            self.assertRaises(netguard.Blocked),
+        ):
+            netguard.get("http://rebind.example/")
 
     def test_lookalike_hosts_do_not_reach_ytdlp(self):
         from tasteserver.fetch import classify
+
         self.assertEqual(classify("https://www.tiktok.com/@a/video/1"), "tiktok")
         self.assertEqual(classify("https://vm.tiktok.com/x"), "tiktok")
         self.assertEqual(classify("https://tiktok.com.evil.example/v"), "article")
@@ -105,23 +147,35 @@ class NetguardTests(unittest.TestCase):
 class ClientIpTests(unittest.TestCase):
     def request(self, headers):
         from starlette.requests import Request
-        scope = {"type": "http", "headers": [(k.lower().encode(), v.encode()) for k, v in headers.items()], "client": ("10.0.0.9", 1234)}
+
+        scope = {
+            "type": "http",
+            "headers": [(k.lower().encode(), v.encode()) for k, v in headers.items()],
+            "client": ("10.0.0.9", 1234),
+        }
         return Request(scope)
 
     def test_forwarded_for_is_never_trusted(self):
         from tasteserver import ratelimit
-        self.assertEqual(ratelimit.client_ip(self.request({"X-Forwarded-For": "1.2.3.4", "X-Real-IP": "5.6.7.8"})), "5.6.7.8")
+
+        self.assertEqual(
+            ratelimit.client_ip(self.request({"X-Forwarded-For": "1.2.3.4", "X-Real-IP": "5.6.7.8"})), "5.6.7.8"
+        )
         self.assertEqual(ratelimit.client_ip(self.request({"X-Forwarded-For": "1.2.3.4"})), "10.0.0.9")
 
     def test_dashboard_forwarding_needs_the_secret(self):
         from tasteserver import ratelimit
+
         with patch.object(ratelimit, "DASHBOARD_PROXY_SECRET", "s3cret"):
             forged = {"X-Taste-Client-IP": "1.1.1.1", "X-Taste-Proxy-Secret": "guess", "X-Real-IP": "5.6.7.8"}
             self.assertEqual(ratelimit.client_ip(self.request(forged)), "5.6.7.8")
             signed = {**forged, "X-Taste-Proxy-Secret": "s3cret"}
             self.assertEqual(ratelimit.client_ip(self.request(signed)), "1.1.1.1")
         with patch.object(ratelimit, "DASHBOARD_PROXY_SECRET", ""):
-            self.assertEqual(ratelimit.client_ip(self.request({"X-Taste-Client-IP": "1.1.1.1", "X-Taste-Proxy-Secret": ""})), "10.0.0.9")
+            self.assertEqual(
+                ratelimit.client_ip(self.request({"X-Taste-Client-IP": "1.1.1.1", "X-Taste-Proxy-Secret": ""})),
+                "10.0.0.9",
+            )
 
 
 @unittest.skipUnless(os.getenv("TEST_DATABASE_URL"), "set TEST_DATABASE_URL for isolated PostgreSQL integration tests")
@@ -133,9 +187,17 @@ class DatabaseTests(unittest.TestCase):
         cls.admin = psycopg.connect(cls.url, autocommit=True)
         cls.admin.execute(sql.SQL("CREATE SCHEMA {}").format(sql.Identifier(cls.schema)))
         cls.original_pool = db.pool
-        db.pool = ConnectionPool(conninfo=cls.url, min_size=1, max_size=6,
-                                 kwargs={"row_factory": dict_row, "options": f"-c search_path={cls.schema},public"})
-        script = (pathlib.Path(db.__file__).parent / "schema.sql").read_text().replace("CREATE EXTENSION IF NOT EXISTS pgcrypto;", "")
+        db.pool = ConnectionPool(
+            conninfo=cls.url,
+            min_size=1,
+            max_size=6,
+            kwargs={"row_factory": dict_row, "options": f"-c search_path={cls.schema},public"},
+        )
+        script = (
+            (pathlib.Path(db.__file__).parent / "schema.sql")
+            .read_text()
+            .replace("CREATE EXTENSION IF NOT EXISTS pgcrypto;", "")
+        )
         with db.conn() as c:
             c.execute(script)
             for k, v in db.DEFAULT_SETTINGS.items():
@@ -151,12 +213,20 @@ class DatabaseTests(unittest.TestCase):
     def setUp(self):
         db.q("TRUNCATE users, webhook_events, rate_limits CASCADE")
         db.set_setting("open_signup", False)
-        self.patches = [patch.object(blooio, "send_text", return_value={"id": "sent_test", "chat_id": "chat_test", "status": "queued"}),
-                        patch.object(blooio, "typing"), patch.object(blooio, "enabled", return_value=True),
-                        patch.object(blooio, "NUMBER", OTHER), patch.object(dispatch.time, "sleep")]
+        self.patches = [
+            patch.object(
+                blooio, "send_text", return_value={"id": "sent_test", "chat_id": "chat_test", "status": "queued"}
+            ),
+            patch.object(blooio, "typing"),
+            patch.object(blooio, "enabled", return_value=True),
+            patch.object(blooio, "NUMBER", OTHER),
+            patch.object(dispatch.time, "sleep"),
+        ]
         self.send = self.patches[0].start()
-        for p in self.patches[1:]: p.start()
-        for p in self.patches: self.addCleanup(p.stop)
+        for p in self.patches[1:]:
+            p.start()
+        for p in self.patches:
+            self.addCleanup(p.stop)
 
     def user(self, phone=PHONE):
         u = db.q("INSERT INTO users(transport) VALUES ('blooio') RETURNING *", one=True)
@@ -176,25 +246,31 @@ class DatabaseTests(unittest.TestCase):
         code = re.search(r"\b[0-9]{6}\b", db.q("SELECT text FROM messages", one=True)["text"])[0]
         result = login.exchange(PHONE, code, "test")
         self.assertEqual(result["user_id"], str(u["id"]))
-        with self.assertRaises(HTTPException): login.exchange(PHONE, code, "test")
+        with self.assertRaises(HTTPException):
+            login.exchange(PHONE, code, "test")
 
     def test_wrong_phone_and_five_guesses(self):
         u = self.user()
         code, _ = self.code(u)
-        with self.assertRaises(HTTPException): login.exchange(OTHER, code, "test")
+        with self.assertRaises(HTTPException):
+            login.exchange(OTHER, code, "test")
         for _ in range(5):
-            with self.assertRaises(HTTPException): login.exchange(PHONE, "000000", "test")
+            with self.assertRaises(HTTPException):
+                login.exchange(PHONE, "000000", "test")
         self.assertEqual(db.q("SELECT attempts FROM login_challenges", one=True)["attempts"], 5)
-        with self.assertRaises(HTTPException): login.exchange(PHONE, code, "test")
+        with self.assertRaises(HTTPException):
+            login.exchange(PHONE, code, "test")
 
     def test_expired_and_disabled_user(self):
         u = self.user()
         code, _ = self.code(u)
         db.q("UPDATE login_challenges SET expires_at = now() - interval '1 second'")
-        with self.assertRaises(HTTPException): login.exchange(PHONE, code, "test")
+        with self.assertRaises(HTTPException):
+            login.exchange(PHONE, code, "test")
         code, _ = self.code(u)
         db.q("UPDATE users SET status='disabled'")
-        with self.assertRaises(HTTPException): login.exchange(PHONE, code, "test")
+        with self.assertRaises(HTTPException):
+            login.exchange(PHONE, code, "test")
         self.assertFalse(db.q("SELECT * FROM api_keys"))
 
     def test_code_reuse_and_superseded_delivery(self):
@@ -210,9 +286,13 @@ class DatabaseTests(unittest.TestCase):
 
     def test_two_simultaneous_exchanges_only_one_session(self):
         code, _ = self.code(self.user())
+
         def attempt(_):
-            try: return login.exchange(PHONE, code, "test")
-            except HTTPException: return None
+            try:
+                return login.exchange(PHONE, code, "test")
+            except HTTPException:
+                return None
+
         with concurrent.futures.ThreadPoolExecutor(2) as pool:
             results = list(pool.map(attempt, range(2)))
         self.assertEqual(sum(r is not None for r in results), 1)
@@ -224,7 +304,7 @@ class DatabaseTests(unittest.TestCase):
         known = client.post("/v1/auth/request", json={"phone": PHONE})
         unknown = client.post("/v1/auth/request", json={"phone": OTHER})
         self.assertEqual(known.json(), unknown.json())
-        self.assertEqual(client.post("/v1/auth/exchange", json={"token":"123456"}).status_code, 422)
+        self.assertEqual(client.post("/v1/auth/exchange", json={"token": "123456"}).status_code, 422)
         self.assertEqual(len(db.q("SELECT * FROM users")), 1)
         self.assertFalse(client.get("/v1/public/config").json()["open_signup"])
 
@@ -232,11 +312,14 @@ class DatabaseTests(unittest.TestCase):
         client = TestClient(api.app)
         too_big = b"x" * (MAX_BODY_BYTES + 1)
         self.assertEqual(client.post("/v1/inbound", content=too_big).status_code, 413)
-        self.assertEqual(client.post("/v1/inbound", content=iter([too_big[:4_000_000], too_big[4_000_000:]])).status_code, 413)
+        self.assertEqual(
+            client.post("/v1/inbound", content=iter([too_big[:4_000_000], too_big[4_000_000:]])).status_code, 413
+        )
         self.assertEqual(client.post("/v1/inbound", content=b"{}", headers={"Content-Length": "abc"}).status_code, 413)
 
     def transport_key(self, u):
         from tasteserver import auth
+
         raw, _ = auth.create_key(u["id"], "relay", ["transport"])
         return {"Authorization": f"Bearer {raw}"}
 
@@ -244,14 +327,26 @@ class DatabaseTests(unittest.TestCase):
         u = self.user()
         client = TestClient(api.app)
         headers = self.transport_key(u)
-        bad = client.post("/v1/inbound", headers=headers, json={"handle": PHONE, "attachments": [
-            {"content_type": "image/png", "data_b64": "not base64!!"}]})
+        bad = client.post(
+            "/v1/inbound",
+            headers=headers,
+            json={"handle": PHONE, "attachments": [{"content_type": "image/png", "data_b64": "not base64!!"}]},
+        )
         self.assertEqual(bad.status_code, 400)
         svg = base64.b64encode(b"<svg onload=alert(1)>").decode()
         png = base64.b64encode(b"\x89PNG fake").decode()
         with patch.object(storage, "put") as put:
-            ok = client.post("/v1/inbound", headers=headers, json={"handle": PHONE, "attachments": [
-                {"content_type": "image/svg+xml", "data_b64": svg}, {"content_type": "image/png", "data_b64": png}]})
+            ok = client.post(
+                "/v1/inbound",
+                headers=headers,
+                json={
+                    "handle": PHONE,
+                    "attachments": [
+                        {"content_type": "image/svg+xml", "data_b64": svg},
+                        {"content_type": "image/png", "data_b64": png},
+                    ],
+                },
+            )
         self.assertEqual(ok.status_code, 200)
         self.assertEqual([c.args[2] for c in put.call_args_list], ["image/png"])
 
@@ -261,19 +356,31 @@ class DatabaseTests(unittest.TestCase):
         headers = self.transport_key(u)
         for path in ["/v1/me", "/v1/items", "/v1/profile", "/v1/messages", "/v1/me/memory"]:
             self.assertEqual(client.get(path, headers=headers).status_code, 403, path)
-        self.assertEqual(client.get("/v1/outbound", headers={"Authorization": headers["Authorization"].replace("Bearer", "bearer")}).status_code, 200)
+        self.assertEqual(
+            client.get(
+                "/v1/outbound", headers={"Authorization": headers["Authorization"].replace("Bearer", "bearer")}
+            ).status_code,
+            200,
+        )
 
     def test_list_bounds_and_admin_validation(self):
         from tasteserver import auth
+
         u = self.user()
         raw, _ = auth.create_key(None, "admin", ["admin"])
         client = TestClient(api.app)
         admin = {"Authorization": f"Bearer {raw}"}
         self.assertEqual(client.get(f"/v1/items?limit=-1&user_id={u['id']}", headers=admin).status_code, 422)
         self.assertEqual(client.get(f"/v1/items?offset=-5&user_id={u['id']}", headers=admin).status_code, 422)
-        self.assertEqual(client.patch(f"/v1/admin/users/{u['id']}", headers=admin, json={"role": "root"}).status_code, 400)
-        self.assertEqual(client.patch(f"/v1/admin/users/{u['id']}", headers=admin, json={"tz": "Mars/Base"}).status_code, 400)
-        self.assertEqual(client.patch(f"/v1/admin/users/{u['id']}", headers=admin, json={"status": "disabled"}).status_code, 200)
+        self.assertEqual(
+            client.patch(f"/v1/admin/users/{u['id']}", headers=admin, json={"role": "root"}).status_code, 400
+        )
+        self.assertEqual(
+            client.patch(f"/v1/admin/users/{u['id']}", headers=admin, json={"tz": "Mars/Base"}).status_code, 400
+        )
+        self.assertEqual(
+            client.patch(f"/v1/admin/users/{u['id']}", headers=admin, json={"status": "disabled"}).status_code, 200
+        )
 
     def test_first_link_and_duplicate_webhook(self):
         db.set_setting("open_signup", True)
@@ -288,24 +395,33 @@ class DatabaseTests(unittest.TestCase):
     def test_first_attachment(self):
         db.set_setting("open_signup", True)
         ev = event("", attachments=[{"url": "https://example.com/photo.jpg", "content_type": "image/jpeg"}])
-        with patch.object(webhooks, "_store_remote_attachments", return_value=[{"key": "test/photo.jpg", "content_type":"image/jpeg"}]):
+        with patch.object(
+            webhooks,
+            "_store_remote_attachments",
+            return_value=[{"key": "test/photo.jpg", "content_type": "image/jpeg"}],
+        ):
             webhooks.process_blooio_event(ev)
         self.assertTrue(db.q("SELECT attachments FROM messages WHERE direction='in'", one=True)["attachments"])
 
     def test_failure_rolls_back_receipt_and_onboarding(self):
         db.set_setting("open_signup", True)
         ev = event("https://example.com/article")
-        with patch.object(db, "enqueue", side_effect=RuntimeError("test fault")):
-            with self.assertRaises(RuntimeError): webhooks.process_blooio_event(ev)
+        with patch.object(db, "enqueue", side_effect=RuntimeError("test fault")), self.assertRaises(RuntimeError):
+            webhooks.process_blooio_event(ev)
         self.assertFalse(db.q("SELECT * FROM users"))
         self.assertFalse(db.q("SELECT * FROM webhook_events"))
         self.assertIn("job_id", webhooks.process_blooio_event(ev))
 
     def test_invite_preserves_attached_link_and_is_single_use(self):
         code = "test_invitation_123456789"
-        db.q("INSERT INTO invites(token_hash,expires_at) VALUES (%s,now()+interval '1 day')", (hashlib.sha256(code.encode()).hexdigest(),))
+        db.q(
+            "INSERT INTO invites(token_hash,expires_at) VALUES (%s,now()+interval '1 day')",
+            (hashlib.sha256(code.encode()).hexdigest(),),
+        )
         webhooks.process_blooio_event(event(code + " https://example.com/article"))
-        self.assertEqual(db.q("SELECT text FROM messages WHERE direction='in'", one=True)["text"], "https://example.com/article")
+        self.assertEqual(
+            db.q("SELECT text FROM messages WHERE direction='in'", one=True)["text"], "https://example.com/article"
+        )
         self.assertTrue(webhooks.process_blooio_event(event(code, sender=OTHER))["unknown"])
         self.assertEqual(len(db.q("SELECT * FROM users")), 1)
 
@@ -320,7 +436,7 @@ class DatabaseTests(unittest.TestCase):
     def test_temporary_send_failure_retries_same_bubble(self):
         u = self.user()
         mid = db.queue_outbound(u["id"], "first\n\nsecond")
-        self.send.side_effect = [{"id":"first"}, httpx.ReadTimeout("test timeout"), {"id":"second"}]
+        self.send.side_effect = [{"id": "first"}, httpx.ReadTimeout("test timeout"), {"id": "second"}]
         dispatch.run_once()
         self.assertEqual(db.q("SELECT status FROM messages WHERE id=%s", (mid,), one=True)["status"], "queued")
         db.q("UPDATE messages SET send_after=now()")
@@ -340,91 +456,119 @@ class DatabaseTests(unittest.TestCase):
     def test_crashed_send_recovers(self):
         u = self.user()
         mid = db.queue_outbound(u["id"], "recover me")
-        db.q("UPDATE messages SET status='sending',send_attempts=1,send_locked_at=now()-interval '6 minutes' WHERE id=%s", (mid,))
+        db.q(
+            "UPDATE messages SET status='sending',send_attempts=1,send_locked_at=now()-interval '6 minutes' WHERE id=%s",
+            (mid,),
+        )
         dispatch.run_once()
         self.assertEqual(db.q("SELECT status FROM messages WHERE id=%s", (mid,), one=True)["status"], "sent")
 
     def item(self, user, title="a quiet room"):
-        return db.add_item(user["id"], title=title, kind="essay", summary="on space and attention",
-                           snippets=["A room can make room for a thought."], tags=["design"], read_minutes=5)
+        return db.add_item(
+            user["id"],
+            title=title,
+            kind="essay",
+            summary="on space and attention",
+            snippets=["A room can make room for a thought."],
+            tags=["design"],
+            read_minutes=5,
+        )
 
     def test_memory_and_feedback_are_isolated(self):
-        a,b=self.user(),self.user(OTHER)
+        a, b = self.user(), self.user(OTHER)
         memory.remember(a["id"], "I love quiet interiors.")
-        item=self.item(a)
-        self.assertEqual(len(memory.memories(a["id"])),1)
-        self.assertEqual(memory.memories(b["id"]),[])
-        with self.assertRaises(HTTPException): memory.feedback(b["id"],item,"finished")
-        memory.feedback(a["id"],item,"finished")
-        memory.feedback(a["id"],item,"finished")
-        self.assertEqual(len(db.q("SELECT * FROM item_events")),1)
-        self.assertEqual(memory.daily(a["id"],"2026-09-12")["picks"],[])
-        self.assertEqual(memory.daily(a["id"],"2026-09-12")["finished_week"],1)
+        item = self.item(a)
+        self.assertEqual(len(memory.memories(a["id"])), 1)
+        self.assertEqual(memory.memories(b["id"]), [])
+        with self.assertRaises(HTTPException):
+            memory.feedback(b["id"], item, "finished")
+        memory.feedback(a["id"], item, "finished")
+        memory.feedback(a["id"], item, "finished")
+        self.assertEqual(len(db.q("SELECT * FROM item_events")), 1)
+        self.assertEqual(memory.daily(a["id"], "2026-09-12")["picks"], [])
+        self.assertEqual(memory.daily(a["id"], "2026-09-12")["finished_week"], 1)
 
     def test_all_explicit_memories_are_valid_json(self):
-        u=self.user()
-        for i in range(30): memory.remember(u["id"],str(i)+"x"*490)
-        self.assertEqual(len(json.loads(memory.context(u["id"]))),30)
-        with self.assertRaises(HTTPException): memory.remember(u["id"],"one too many")
+        u = self.user()
+        for i in range(30):
+            memory.remember(u["id"], str(i) + "x" * 490)
+        self.assertEqual(len(json.loads(memory.context(u["id"]))), 30)
+        with self.assertRaises(HTTPException):
+            memory.remember(u["id"], "one too many")
 
     def test_daily_picks_stable_and_snooze_respected(self):
-        u=self.user()
-        for i in range(4): self.item(u,str(i))
-        first=memory.daily(u["id"],"2026-09-12")["picks"]
-        self.assertEqual(first,memory.daily(u["id"],"2026-09-12")["picks"])
-        iid=first[0]["item"]["id"]
-        memory.feedback(u["id"],iid,"later")
-        self.assertNotIn(iid,[p["item"]["id"] for p in memory.daily(u["id"],"2026-09-12")["picks"]])
-        self.assertNotIn(iid,[i["id"] for i in scheduler.proactive_candidates(u)])
+        u = self.user()
+        for i in range(4):
+            self.item(u, str(i))
+        first = memory.daily(u["id"], "2026-09-12")["picks"]
+        self.assertEqual(first, memory.daily(u["id"], "2026-09-12")["picks"])
+        iid = first[0]["item"]["id"]
+        memory.feedback(u["id"], iid, "later")
+        self.assertNotIn(iid, [p["item"]["id"] for p in memory.daily(u["id"], "2026-09-12")["picks"]])
+        self.assertNotIn(iid, [i["id"] for i in scheduler.proactive_candidates(u)])
 
     def test_proactive_silence_and_grounded_excerpt(self):
-        u=self.user();iid=self.item(u)
-        choice=brain.ProactiveChoice(send=False,item_id=0,excerpt_index=0,connection="",reason="no concrete connection")
-        with patch.object(brain,"proactive_choice",return_value=choice):
+        u = self.user()
+        iid = self.item(u)
+        choice = brain.ProactiveChoice(
+            send=False, item_id=0, excerpt_index=0, connection="", reason="no concrete connection"
+        )
+        with patch.object(brain, "proactive_choice", return_value=choice):
             self.assertIsNone(handlers.do_proactive(u))
         self.assertFalse(db.q("SELECT * FROM messages"))
-        choice=brain.ProactiveChoice(send=True,item_id=iid,excerpt_index=0,connection="this connects to your interest in interiors.",reason="explicit interest")
-        with patch.object(brain,"proactive_choice",return_value=choice):
-            mid=handlers.do_proactive(u)
-        row=db.q("SELECT * FROM messages WHERE id=%s",(mid,),one=True)
-        self.assertIn("A room can make room for a thought.",row["text"])
-        self.assertIn(f"/items/{iid}",row["text"])
+        choice = brain.ProactiveChoice(
+            send=True,
+            item_id=iid,
+            excerpt_index=0,
+            connection="this connects to your interest in interiors.",
+            reason="explicit interest",
+        )
+        with patch.object(brain, "proactive_choice", return_value=choice):
+            mid = handlers.do_proactive(u)
+        row = db.q("SELECT * FROM messages WHERE id=%s", (mid,), one=True)
+        self.assertIn("A room can make room for a thought.", row["text"])
+        self.assertIn(f"/items/{iid}", row["text"])
         self.assertTrue(row["meta"]["proactive"])
-        self.assertEqual(row["meta"]["item_id"],iid)
+        self.assertEqual(row["meta"]["item_id"], iid)
 
     def test_proactive_rejects_other_users_item(self):
-        a,b=self.user(),self.user(OTHER)
-        self.item(a); other=self.item(b)
-        choice=brain.ProactiveChoice(send=True,item_id=other,excerpt_index=0,connection="test",reason="test")
-        with patch.object(brain,"proactive_choice",return_value=choice):
+        a, b = self.user(), self.user(OTHER)
+        self.item(a)
+        other = self.item(b)
+        choice = brain.ProactiveChoice(send=True, item_id=other, excerpt_index=0, connection="test", reason="test")
+        with patch.object(brain, "proactive_choice", return_value=choice):
             self.assertIsNone(handlers.do_proactive(a))
         self.assertFalse(db.q("SELECT * FROM messages"))
 
     def test_two_unanswered_suggestions_wait_for_engagement(self):
-        u=self.user();iid=self.item(u)
+        u = self.user()
+        iid = self.item(u)
         for _ in range(2):
-            mid=db.queue_outbound(u["id"],"a suggestion")
-            db.q("UPDATE messages SET meta='{\"proactive\":true}',status='sent' WHERE id=%s",(mid,))
+            mid = db.queue_outbound(u["id"], "a suggestion")
+            db.q("UPDATE messages SET meta='{\"proactive\":true}',status='sent' WHERE id=%s", (mid,))
         self.assertFalse(scheduler.attention_available(u))
-        memory.feedback(u["id"],iid,"later")
+        memory.feedback(u["id"], iid, "later")
         self.assertTrue(scheduler.attention_available(u))
 
     def test_due_slot_obeys_current_quiet_hours(self):
-        u=self.user()
-        db.set_user_state(u["id"],plan={"date":"2026-09-12","slots":[{"at":"2026-09-12T12:00:00-04:00","done":False}]})
-        with patch.object(scheduler,"_now",return_value=dt.datetime.fromisoformat("2026-09-12T23:00:00-04:00")):
+        u = self.user()
+        db.set_user_state(
+            u["id"], plan={"date": "2026-09-12", "slots": [{"at": "2026-09-12T12:00:00-04:00", "done": False}]}
+        )
+        with patch.object(scheduler, "_now", return_value=dt.datetime.fromisoformat("2026-09-12T23:00:00-04:00")):
             self.assertIsNone(scheduler.due_slot(u))
-        with patch.object(scheduler,"_now",return_value=dt.datetime.fromisoformat("2026-09-12T14:00:00-04:00")):
-            self.assertEqual(scheduler.due_slot(u),0)
+        with patch.object(scheduler, "_now", return_value=dt.datetime.fromisoformat("2026-09-12T14:00:00-04:00")):
+            self.assertEqual(scheduler.due_slot(u), 0)
 
     def test_pause_cancels_queued_proactive_message(self):
-        u=self.user();iid=self.item(u)
-        mid=db.queue_outbound(u["id"],"a suggestion")
-        db.q("UPDATE messages SET meta=%s WHERE id=%s",(db.J({"proactive":True,"item_id":iid}),mid))
-        db.q("UPDATE users SET settings='{\"paused\":true}' WHERE id=%s",(u["id"],))
+        u = self.user()
+        iid = self.item(u)
+        mid = db.queue_outbound(u["id"], "a suggestion")
+        db.q("UPDATE messages SET meta=%s WHERE id=%s", (db.J({"proactive": True, "item_id": iid}), mid))
+        db.q("UPDATE users SET settings='{\"paused\":true}' WHERE id=%s", (u["id"],))
         dispatch.run_once()
         self.send.assert_not_called()
-        self.assertEqual(db.q("SELECT status FROM messages WHERE id=%s",(mid,),one=True)["status"],"cancelled")
+        self.assertEqual(db.q("SELECT status FROM messages WHERE id=%s", (mid,), one=True)["status"], "cancelled")
 
 
 if __name__ == "__main__":

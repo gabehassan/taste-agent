@@ -16,11 +16,17 @@ def new_key():
 def create_key(user_id, name, scopes, expires_days=None):
     raw, h, prefix = new_key()
     if expires_days:
-        r = db.q("INSERT INTO api_keys(user_id, name, key_hash, prefix, scopes, expires_at) VALUES (%s, %s, %s, %s, %s, now() + make_interval(days => %s)) RETURNING id",
-                 (user_id, name, h, prefix, list(scopes), int(expires_days)), one=True)
+        r = db.q(
+            "INSERT INTO api_keys(user_id, name, key_hash, prefix, scopes, expires_at) VALUES (%s, %s, %s, %s, %s, now() + make_interval(days => %s)) RETURNING id",
+            (user_id, name, h, prefix, list(scopes), int(expires_days)),
+            one=True,
+        )
     else:
-        r = db.q("INSERT INTO api_keys(user_id, name, key_hash, prefix, scopes) VALUES (%s, %s, %s, %s, %s) RETURNING id",
-                 (user_id, name, h, prefix, list(scopes)), one=True)
+        r = db.q(
+            "INSERT INTO api_keys(user_id, name, key_hash, prefix, scopes) VALUES (%s, %s, %s, %s, %s) RETURNING id",
+            (user_id, name, h, prefix, list(scopes)),
+            one=True,
+        )
     return raw, r["id"]
 
 
@@ -28,7 +34,11 @@ def lookup(raw):
     if not raw or not raw.startswith("tk_"):
         return None
     h = hashlib.sha256(raw.encode()).hexdigest()
-    k = db.q("SELECT * FROM api_keys WHERE key_hash = %s AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > now())", (h,), one=True)
+    k = db.q(
+        "SELECT * FROM api_keys WHERE key_hash = %s AND revoked_at IS NULL AND (expires_at IS NULL OR expires_at > now())",
+        (h,),
+        one=True,
+    )
     if not k:
         return None
     db.q("UPDATE api_keys SET last_used_at = now() WHERE id = %s", (k["id"],))
@@ -68,6 +78,7 @@ def require(*scopes):
         if p.is_admin() or p.scopes & set(scopes):
             return p
         raise HTTPException(403, f"needs scope: {' or '.join(scopes)}")
+
     return dep
 
 
@@ -82,3 +93,9 @@ def target_user(request: Request, p: Principal):
     if not p.user:
         raise HTTPException(400, "admin key has no user; pass ?user_id=")
     return p.user
+
+
+# Route dependencies. An admin key satisfies every scope.
+TRANSPORT = Depends(require("transport"))
+USER = Depends(require("user"))
+ADMIN = Depends(require("admin"))

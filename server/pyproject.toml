@@ -1,7 +1,8 @@
 [project]
 name = "tasteserver"
 version = "0.1.0"
-description = "taste backend: API + worker"
+description = "API and worker for taste, an iMessage agent that learns what you like"
+license = "MIT"
 requires-python = ">=3.13"
 dependencies = [
     "fastapi>=0.115",
@@ -22,3 +23,21 @@ build-backend = "setuptools.build_meta"
 
 [tool.setuptools.packages.find]
 include = ["tasteserver*"]
+
+[dependency-groups]
+dev = ["pytest>=8.3", "ruff>=0.9"]
+
+[tool.ruff]
+line-length = 120
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E", "W", "F", "I", "B", "UP", "SIM"]
+# SQL and prompt strings stay on one line so they can be read and grepped whole.
+ignore = ["E501"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+
+[tool.ruff.lint.flake8-bugbear]
+extend-immutable-calls = ["fastapi.Depends", "fastapi.Query"]

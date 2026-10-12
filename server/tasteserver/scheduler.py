@@ -1,4 +1,5 @@
 """Per-user resurfacing: when, and what."""
+
 import datetime as dt
 import random
 import re
@@ -57,15 +58,26 @@ def due_slot(user):
     if not attention_available(user):
         return None
     start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    sent = db.q("SELECT COUNT(*) AS n FROM messages WHERE user_id=%s AND direction='out' AND meta->>'proactive'='true' AND status IN ('queued','sending','sent') AND created_at >= %s", (user["id"], start), one=True)["n"]
+    sent = db.q(
+        "SELECT COUNT(*) AS n FROM messages WHERE user_id=%s AND direction='out' AND meta->>'proactive'='true' AND status IN ('queued','sending','sent') AND created_at >= %s",
+        (user["id"], start),
+        one=True,
+    )["n"]
     if sent >= int(db.user_setting(user, "surfaces_per_day")):
         return None
     plan = todays_plan(user)
     last = db.last_surface(user["id"])
-    if last and (dt.datetime.now(dt.timezone.utc) - last["created_at"]).total_seconds() < int(db.user_setting(user, "min_gap_minutes")) * 60:
+    if (
+        last
+        and (dt.datetime.now(dt.UTC) - last["created_at"]).total_seconds()
+        < int(db.user_setting(user, "min_gap_minutes")) * 60
+    ):
         return None
     # don't interrupt an active conversation: quiet if they texted in the last 20 min
-    recent = db.q("SELECT 1 FROM messages WHERE user_id = %s AND direction = 'in' AND created_at > now() - interval '20 minutes' LIMIT 1", (user["id"],))
+    recent = db.q(
+        "SELECT 1 FROM messages WHERE user_id = %s AND direction = 'in' AND created_at > now() - interval '20 minutes' LIMIT 1",
+        (user["id"],),
+    )
     if recent:
         return None
     for i, slot in enumerate(plan["slots"]):
@@ -83,7 +95,7 @@ def mark_slot_done(user, i):
 
 def pick_item(user, exclude_id=None):
     items = [i for i in db.list_items(user["id"], limit=500) if memory.eligible(i) and i["snippets"]]
-    now = dt.datetime.now(dt.timezone.utc)
+    now = dt.datetime.now(dt.UTC)
     last = db.last_surface(user["id"])
     last_kind = None
     if last and last.get("item_id"):
@@ -112,7 +124,7 @@ def pick_item(user, exclude_id=None):
             w *= 1.6
         if "dislike" in reactions:
             w *= 0.2
-        w /= (1 + it["surfaced_count"])
+        w /= 1 + it["surfaced_count"]
         weighted.append((w, it))
     if not weighted:
         return None
@@ -126,17 +138,24 @@ def pick_item(user, exclude_id=None):
 
 def format_surface(item):
     snippets = item["snippets"]
-    snippet = snippets[item["surfaced_count"] % len(snippets)].strip().strip('“”"\'‘’')
+    snippet = snippets[item["surfaced_count"] % len(snippets)].strip().strip("“”\"'‘’")
     from .prompts import surface_format
+
     by = f" by {item['author']}" if item.get("author") else ""
     src = item.get("source") or item["kind"]
-    return surface_format().format(snippet=snippet, title=item["title"], by=by, source=src, url=item.get("url") or "").rstrip()
+    return (
+        surface_format()
+        .format(snippet=snippet, title=item["title"], by=by, source=src, url=item.get("url") or "")
+        .rstrip()
+    )
 
 
 def next_surface(user, force_kind=None):
     profile = db.latest_profile(user["id"])
     chance = float(db.user_setting(user, "observation_chance"))
-    want_obs = force_kind == "observation" or (force_kind is None and profile and profile["observations"] and random.random() < chance)
+    want_obs = force_kind == "observation" or (
+        force_kind is None and profile and profile["observations"] and random.random() < chance
+    )
     if want_obs and profile and profile["observations"]:
         state = db.user_state(user["id"])
         used = set(state.get("used_observations") or [])
@@ -155,22 +174,33 @@ def next_surface(user, force_kind=None):
 def attention_available(user):
     """Inactivity reduces contact; it is never treated as evidence of dislike."""
     uid = user["id"]
-    row = db.q("""SELECT COUNT(*) AS n FROM messages WHERE user_id=%s AND direction='out'
+    row = db.q(
+        """SELECT COUNT(*) AS n FROM messages WHERE user_id=%s AND direction='out'
         AND meta->>'proactive'='true' AND status IN ('queued','sending','sent')
         AND created_at > GREATEST(
             COALESCE((SELECT max(created_at) FROM messages WHERE user_id=%s AND direction='in'), '-infinity'::timestamptz),
-            COALESCE((SELECT max(created_at) FROM item_events WHERE user_id=%s), '-infinity'::timestamptz))""", (uid, uid, uid), one=True)
+            COALESCE((SELECT max(created_at) FROM item_events WHERE user_id=%s), '-infinity'::timestamptz))""",
+        (uid, uid, uid),
+        one=True,
+    )
     return row["n"] < 2
 
 
 def proactive_candidates(user):
-    now = dt.datetime.now(dt.timezone.utc)
-    items = [i for i in db.list_items(user["id"], limit=500) if memory.eligible(i, now) and i.get("snippets")
-             and (not i.get("last_surfaced_at") or (now-i["last_surfaced_at"]).days >= 5)]
+    now = dt.datetime.now(dt.UTC)
+    items = [
+        i
+        for i in db.list_items(user["id"], limit=500)
+        if memory.eligible(i, now)
+        and i.get("snippets")
+        and (not i.get("last_surfaced_at") or (now - i["last_surfaced_at"]).days >= 5)
+    ]
     recent = db.recent_chat(user["id"], n=6, max_age_hours=72)
     interest = memory.context(user["id"]) + " " + " ".join(c["content"] for c in recent if c["role"] == "user")
     words = set(re.findall(r"[a-z]{4,}", interest.lower()))
+
     def score(it):
         terms = set(re.findall(r"[a-z]{4,}", " ".join([it["title"] or "", *(it.get("tags") or [])]).lower()))
-        return (len(words & terms), not bool(it["surfaced_count"]), (now-it["created_at"]).days)
+        return (len(words & terms), not bool(it["surfaced_count"]), (now - it["created_at"]).days)
+
     return sorted(items, key=score, reverse=True)[:8]

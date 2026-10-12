@@ -1,4 +1,5 @@
 """Hosted outbound delivery with bounded retries and per-bubble idempotency."""
+
 import logging
 import time
 
@@ -12,7 +13,11 @@ MAX_ATTEMPTS = 5
 
 
 def _phone_for(user_id):
-    r = db.q("SELECT address FROM handles WHERE user_id = %s AND address LIKE '+%%' ORDER BY last_seen_at DESC NULLS LAST LIMIT 1", (user_id,), one=True)
+    r = db.q(
+        "SELECT address FROM handles WHERE user_id = %s AND address LIKE '+%%' ORDER BY last_seen_at DESC NULLS LAST LIMIT 1",
+        (user_id,),
+        one=True,
+    )
     return r["address"] if r else None
 
 
@@ -40,11 +45,15 @@ def retry_delay(error, attempt):
 def _claim():
     # A lost worker lease can be recovered safely for texts using the stored send plan.
     # Reactions lack that guarantee, so abandoned reactions require manual attention.
-    db.q("""UPDATE messages SET status = CASE WHEN kind = 'reaction' OR send_attempts >= %s
+    db.q(
+        """UPDATE messages SET status = CASE WHEN kind = 'reaction' OR send_attempts >= %s
               OR send_locked_at < now() - interval '12 hours' THEN 'failed' ELSE 'queued' END,
               send_locked_at = NULL, meta = meta || '{"error": "worker interrupted during send"}'
-              WHERE status = 'sending' AND send_locked_at < now() - interval '5 minutes'""", (MAX_ATTEMPTS,))
-    return db.q("""UPDATE messages SET status = 'sending', send_locked_at = now(), send_attempts = send_attempts + 1
+              WHERE status = 'sending' AND send_locked_at < now() - interval '5 minutes'""",
+        (MAX_ATTEMPTS,),
+    )
+    return db.q(
+        """UPDATE messages SET status = 'sending', send_locked_at = now(), send_attempts = send_attempts + 1
                    WHERE id = (
                      SELECT m.id FROM messages m JOIN users u ON u.id = m.user_id
                      WHERE m.direction = 'out' AND m.status = 'queued' AND m.send_after <= now()
@@ -52,7 +61,9 @@ def _claim():
                        AND NOT EXISTS (SELECT 1 FROM messages earlier WHERE earlier.user_id = m.user_id
                          AND earlier.direction = 'out' AND earlier.id < m.id AND earlier.status IN ('queued', 'sending'))
                      ORDER BY m.id FOR UPDATE OF m SKIP LOCKED LIMIT 1)
-                   RETURNING *""", one=True)
+                   RETURNING *""",
+        one=True,
+    )
 
 
 def _send(m):
@@ -62,22 +73,34 @@ def _send(m):
         now = _now(user)
         item = db.get_item(m["user_id"], meta.get("item_id"))
         # Recheck immediately before transport; a pause or quiet hour can happen while queued.
-        allowed = (not (user.get("settings") or {}).get("paused")
-                   and int(db.user_setting(user, "surfaces_per_day")) > 0
-                   and int(db.user_setting(user, "wake_start")) <= now.hour < int(db.user_setting(user, "wake_end"))
-                   and (now-m["created_at"]).total_seconds() < 7200
-                   and item and memory.eligible(item))
+        allowed = (
+            not (user.get("settings") or {}).get("paused")
+            and int(db.user_setting(user, "surfaces_per_day")) > 0
+            and int(db.user_setting(user, "wake_start")) <= now.hour < int(db.user_setting(user, "wake_end"))
+            and (now - m["created_at"]).total_seconds() < 7200
+            and item
+            and memory.eligible(item)
+        )
         if not allowed:
             db.q("UPDATE messages SET status='cancelled', send_locked_at=NULL WHERE id=%s", (m["id"],))
             return
     if meta.get("login_challenge"):
-        live = db.q("SELECT 1 FROM login_challenges WHERE id = %s AND used_at IS NULL AND expires_at > now()", (meta["login_challenge"],), one=True)
+        live = db.q(
+            "SELECT 1 FROM login_challenges WHERE id = %s AND used_at IS NULL AND expires_at > now()",
+            (meta["login_challenge"],),
+            one=True,
+        )
         if not live:
             db.q("UPDATE messages SET status = 'cancelled', send_locked_at = NULL WHERE id = %s", (m["id"],))
             return
     if m["kind"] == "reaction":
-        ok = blooio.react(meta.get("chat_id") or _chat_for(m["user_id"], meta), meta.get("target_external_id"), meta.get("reaction"))
-        db.q("UPDATE messages SET status = %s, sent_at = now(), send_locked_at = NULL WHERE id = %s", ("sent" if ok else "failed", m["id"]))
+        ok = blooio.react(
+            meta.get("chat_id") or _chat_for(m["user_id"], meta), meta.get("target_external_id"), meta.get("reaction")
+        )
+        db.q(
+            "UPDATE messages SET status = %s, sent_at = now(), send_locked_at = NULL WHERE id = %s",
+            ("sent" if ok else "failed", m["id"]),
+        )
         return
     plan = meta.get("send_plan")
     if plan is None:
@@ -93,16 +116,40 @@ def _send(m):
         if chat_id:
             blooio.typing(chat_id, True)
             time.sleep(min(0.6 + len(b) / 120, 3.0))
-        last = blooio.send_text(plan["to"], b, from_number=plan["from"],
-                                idempotency_key=f"taste:{m['user_id']}:{m['id']}:{i}")
+        last = blooio.send_text(
+            plan["to"], b, from_number=plan["from"], idempotency_key=f"taste:{m['user_id']}:{m['id']}:{i}"
+        )
         chat_id = chat_id or last.get("chat_id")
         # A crash before this checkpoint replays the identical key and body.
-        db.q("UPDATE messages SET meta = meta || %s WHERE id = %s",
-             (db.J({"next_bubble": i + 1, "last_send": {k: last.get(k) for k in ("id", "message_id", "protocol", "status")}, "chat_id": chat_id}), m["id"]))
-    db.q("""UPDATE messages SET status = 'sent', sent_at = now(), send_locked_at = NULL,
+        db.q(
+            "UPDATE messages SET meta = meta || %s WHERE id = %s",
+            (
+                db.J(
+                    {
+                        "next_bubble": i + 1,
+                        "last_send": {k: last.get(k) for k in ("id", "message_id", "protocol", "status")},
+                        "chat_id": chat_id,
+                    }
+                ),
+                m["id"],
+            ),
+        )
+    db.q(
+        """UPDATE messages SET status = 'sent', sent_at = now(), send_locked_at = NULL,
              external_id = %s, chat_id = %s, meta = (meta - 'error') || %s WHERE id = %s""",
-         (last.get("id") or last.get("message_id"), chat_id,
-          db.J({"bubbles": len(plan["bubbles"]), "protocol": last.get("protocol"), "provider_status": last.get("status")}), m["id"]))
+        (
+            last.get("id") or last.get("message_id"),
+            chat_id,
+            db.J(
+                {
+                    "bubbles": len(plan["bubbles"]),
+                    "protocol": last.get("protocol"),
+                    "provider_status": last.get("status"),
+                }
+            ),
+            m["id"],
+        ),
+    )
 
 
 def run_once():
@@ -119,8 +166,14 @@ def run_once():
         except Exception as e:
             delay = retry_delay(e, m["send_attempts"]) if m["kind"] != "reaction" else None
             log.warning("send %s attempt %s: %s", m["id"], m["send_attempts"], type(e).__name__)
-            db.q("""UPDATE messages SET status = %s, send_after = now() + make_interval(secs => %s),
+            db.q(
+                """UPDATE messages SET status = %s, send_after = now() + make_interval(secs => %s),
                      send_locked_at = NULL, meta = meta || %s WHERE id = %s""",
-                 ("queued" if delay is not None else "failed", delay or 0,
-                  db.J({"error": str(e)[:300], "retryable": delay is not None}), m["id"]))
+                (
+                    "queued" if delay is not None else "failed",
+                    delay or 0,
+                    db.J({"error": str(e)[:300], "retryable": delay is not None}),
+                    m["id"],
+                ),
+            )
     return n

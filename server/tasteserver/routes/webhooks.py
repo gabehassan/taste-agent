@@ -1,4 +1,5 @@
 """Blooio webhooks: a hosted iMessage number. Unknown senders are onboarded by invite unless open_signup is on."""
+
 import hashlib
 import json
 import logging
@@ -46,15 +47,26 @@ def _onboard_unknown(ev):
         code = m.group(1)
     inv = None
     if code:
-        inv = db.q("SELECT * FROM invites WHERE token_hash = %s AND used_at IS NULL AND expires_at > now() FOR UPDATE", (hashlib.sha256(code.encode()).hexdigest(),), one=True)
+        inv = db.q(
+            "SELECT * FROM invites WHERE token_hash = %s AND used_at IS NULL AND expires_at > now() FOR UPDATE",
+            (hashlib.sha256(code.encode()).hexdigest(),),
+            one=True,
+        )
     if not inv and not db.setting("open_signup"):
         if ratelimit.check(f"unknown_reply:{sender}", 1, 86400):
-            blooio.send_text(sender, prompts.copy("invite_only"), idempotency_key=f"invite-only:{sender}:{ev.get('event_id')}")
+            blooio.send_text(
+                sender, prompts.copy("invite_only"), idempotency_key=f"invite-only:{sender}:{ev.get('event_id')}"
+            )
         return
-    u = db.q("INSERT INTO users(name, email, role, tz, transport, onboarded_at) VALUES (%s, %s, %s, %s, 'blooio', now()) RETURNING *",
-             (None, (inv or {}).get("email"), (inv or {}).get("role", "user"), DEFAULT_TZ), one=True)
-    db.q("INSERT INTO handles(user_id, kind, address, capabilities, last_seen_at) VALUES (%s, 'imessage', %s, %s, now())",
-         (u["id"], sender, db.J(["react", "typing"])))
+    u = db.q(
+        "INSERT INTO users(name, email, role, tz, transport, onboarded_at) VALUES (%s, %s, %s, %s, 'blooio', now()) RETURNING *",
+        (None, (inv or {}).get("email"), (inv or {}).get("role", "user"), DEFAULT_TZ),
+        one=True,
+    )
+    db.q(
+        "INSERT INTO handles(user_id, kind, address, capabilities, last_seen_at) VALUES (%s, 'imessage', %s, %s, now())",
+        (u["id"], sender, db.J(["react", "typing"])),
+    )
     if inv:
         ev["text"] = text.replace(code, "", 1).strip()
         db.q("UPDATE invites SET used_at = now() WHERE id = %s", (inv["id"],))
@@ -105,22 +117,40 @@ def _process_blooio_event(evt):
     user = db.get_user(uid)
     if not user or user["status"] != "active":
         return {"ok": True, "inactive": True}
-    if not ratelimit.check(f"inbound_h:{uid}", int(db.setting("rate_inbound_per_hour")), 3600) or \
-       not ratelimit.check(f"inbound_d:{uid}", int(db.setting("rate_inbound_per_day")), 86400):
+    if not ratelimit.check(f"inbound_h:{uid}", int(db.setting("rate_inbound_per_hour")), 3600) or not ratelimit.check(
+        f"inbound_d:{uid}", int(db.setting("rate_inbound_per_day")), 86400
+    ):
         return {"ok": True, "rate_limited": True}
     if user.get("transport") != "blooio":
         db.q("UPDATE users SET transport = 'blooio' WHERE id = %s", (uid,))
-    db.q("UPDATE handles SET last_seen_at = now(), capabilities = %s WHERE id = %s", (db.J(["react", "typing"]), h["id"]))
+    db.q(
+        "UPDATE handles SET last_seen_at = now(), capabilities = %s WHERE id = %s", (db.J(["react", "typing"]), h["id"])
+    )
     if ev["kind"] == "reaction":
-        m = db.q("""INSERT INTO messages(user_id, direction, handle_id, text, kind, external_id, status, meta, chat_id)
+        m = db.q(
+            """INSERT INTO messages(user_id, direction, handle_id, text, kind, external_id, status, meta, chat_id)
                     VALUES (%s, 'in', %s, '', 'reaction', %s, 'received', %s, %s) RETURNING id""",
-                 (uid, h["id"], ev["event_id"], db.J({"reaction": ev["reaction"], "target_external_id": ev.get("target_message_id")}), ev.get("chat_id")), one=True)
+            (
+                uid,
+                h["id"],
+                ev["event_id"],
+                db.J({"reaction": ev["reaction"], "target_external_id": ev.get("target_message_id")}),
+                ev.get("chat_id"),
+            ),
+            one=True,
+        )
     else:
-        if db.q("SELECT 1 FROM messages WHERE user_id = %s AND direction = 'in' AND external_id = %s", (uid, ev["message_id"])):
+        if db.q(
+            "SELECT 1 FROM messages WHERE user_id = %s AND direction = 'in' AND external_id = %s",
+            (uid, ev["message_id"]),
+        ):
             return {"ok": True, "duplicate": True}
         stored = _store_remote_attachments(uid, ev["attachments"]) if ev["attachments"] else []
-        m = db.q("""INSERT INTO messages(user_id, direction, handle_id, text, kind, attachments, external_id, status, chat_id)
+        m = db.q(
+            """INSERT INTO messages(user_id, direction, handle_id, text, kind, attachments, external_id, status, chat_id)
                     VALUES (%s, 'in', %s, %s, 'text', %s, %s, 'received', %s) RETURNING id""",
-                 (uid, h["id"], (ev["text"] or "")[:8000], db.J(stored), ev["message_id"], ev.get("chat_id")), one=True)
+            (uid, h["id"], (ev["text"] or "")[:8000], db.J(stored), ev["message_id"], ev.get("chat_id")),
+            one=True,
+        )
     job = db.enqueue(uid, "handle_message", {"message_id": m["id"]})
     return {"ok": True, "message_id": m["id"], "job_id": job}

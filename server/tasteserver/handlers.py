@@ -1,4 +1,5 @@
 """Job handlers: everything the worker does for a message."""
+
 import logging
 import re
 import time
@@ -20,6 +21,7 @@ REACTION_EMOJI = {"love": "❤️", "like": "👍", "dislike": "👎", "laugh": 
 
 # ---- outbound ---------------------------------------------------------------------
 
+
 def out(user, text):
     """Queue a text for the transport. Enforces the per-user outbound cap."""
     limit = int(db.setting("rate_outbound_per_hour"))
@@ -38,9 +40,22 @@ def react(user, message, reaction):
         caps = caps | {"react", "typing"}
     if "react" not in caps or not message.get("external_id"):
         return None
-    return db.q("""INSERT INTO messages(user_id, direction, kind, text, status, meta) VALUES (%s, 'out', 'reaction', NULL, 'queued', %s)
-                   RETURNING id""", (user["id"], db.J({"reaction": reaction, "emoji": REACTION_EMOJI.get(reaction, "❤️"),
-                                                       "target_external_id": message["external_id"], "chat_id": message.get("chat_id")})), one=True)["id"]
+    return db.q(
+        """INSERT INTO messages(user_id, direction, kind, text, status, meta) VALUES (%s, 'out', 'reaction', NULL, 'queued', %s)
+                   RETURNING id""",
+        (
+            user["id"],
+            db.J(
+                {
+                    "reaction": reaction,
+                    "emoji": REACTION_EMOJI.get(reaction, "❤️"),
+                    "target_external_id": message["external_id"],
+                    "chat_id": message.get("chat_id"),
+                }
+            ),
+        ),
+        one=True,
+    )["id"]
 
 
 def instant_ack(user, msg, reaction="like"):
@@ -67,27 +82,34 @@ def _capabilities(user):
 
 # ---- voice stats --------------------------------------------------------------------
 
+
 def update_voice(user, text):
     if not text or len(text) < 3:
         return
-    v = (db.user_state(user["id"]).get("voice") or {"n": 0, "avg_len": 0, "lowercase": 0, "emoji": 0, "exclaim": 0})
+    v = db.user_state(user["id"]).get("voice") or {"n": 0, "avg_len": 0, "lowercase": 0, "emoji": 0, "exclaim": 0}
     n = v["n"]
     letters = [c for c in text if c.isalpha()]
     lower = (sum(c.islower() for c in letters) / len(letters)) if letters else 1.0
     emoji = 1.0 if re.search(r"[\U0001F300-\U0001FAFF☀-➿]", text) else 0.0
     exclaim = 1.0 if ("!" in text or "lol" in text.lower() or "omg" in text.lower()) else 0.0
     k = min(n, 30)  # rolling average over ~30 messages
-    v = {"n": n + 1, "avg_len": (v["avg_len"] * k + len(text)) / (k + 1), "lowercase": (v["lowercase"] * k + lower) / (k + 1),
-         "emoji": (v["emoji"] * k + emoji) / (k + 1), "exclaim": (v["exclaim"] * k + exclaim) / (k + 1)}
+    v = {
+        "n": n + 1,
+        "avg_len": (v["avg_len"] * k + len(text)) / (k + 1),
+        "lowercase": (v["lowercase"] * k + lower) / (k + 1),
+        "emoji": (v["emoji"] * k + emoji) / (k + 1),
+        "exclaim": (v["exclaim"] * k + exclaim) / (k + 1),
+    }
     db.set_user_state(user["id"], voice=v)
 
 
 # ---- ingest --------------------------------------------------------------------------
 
+
 def _clean_snippets(snips):
     out = []
     for x in snips or []:
-        x = (x or "").strip().strip('“”"\'‘’').strip()
+        x = (x or "").strip().strip("“”\"'‘’").strip()
         if x:
             out.append(x)
     return out
@@ -105,7 +127,12 @@ def ingest_url(user, url, note="", message_id=None, job_id=None):
     transcript, images, media_files, seconds = "", [], [], 0.0
     if ex.media_url and not ex.meta.get("has_captions"):
         m = media.process(ex.media_url, user["id"], item_key, duration=ex.meta.get("duration"), job_id=job_id)
-        transcript, images, media_files, seconds = m.get("transcript", ""), m.get("frames", []), m.get("media", []), m.get("seconds", 0)
+        transcript, images, media_files, seconds = (
+            m.get("transcript", ""),
+            m.get("frames", []),
+            m.get("media", []),
+            m.get("seconds", 0),
+        )
         if m.get("error"):
             ex.meta["media_error"] = m["error"]
     elif ex.thumbnail and ex.kind in ("tweet", "tiktok", "instagram", "youtube"):
@@ -117,10 +144,26 @@ def ingest_url(user, url, note="", message_id=None, job_id=None):
         except Exception:
             pass
     d = brain.digest(user, ex, note=note, images=images, transcript=transcript, job_id=job_id)
-    fields = dict(url=ex.url, canonical_url=can, kind=d.kind, source=ex.source, title=d.title or ex.title, author=ex.author,
-                  raw_text=ex.text, transcript=transcript or None, summary=d.summary, snippets=_clean_snippets(d.snippets), tags=d.tags,
-                  why=d.why_saved, read_minutes=d.read_minutes, note=note or None, message_id=message_id, media=media_files,
-                  meta={**ex.meta, "thumbnail": ex.thumbnail, "media_seconds": seconds}, status="unread")
+    fields = dict(
+        url=ex.url,
+        canonical_url=can,
+        kind=d.kind,
+        source=ex.source,
+        title=d.title or ex.title,
+        author=ex.author,
+        raw_text=ex.text,
+        transcript=transcript or None,
+        summary=d.summary,
+        snippets=_clean_snippets(d.snippets),
+        tags=d.tags,
+        why=d.why_saved,
+        read_minutes=d.read_minutes,
+        note=note or None,
+        message_id=message_id,
+        media=media_files,
+        meta={**ex.meta, "thumbnail": ex.thumbnail, "media_seconds": seconds},
+        status="unread",
+    )
     if existing:
         db.update_item(existing["id"], **fields)
         item = db.get_item(user["id"], existing["id"])
@@ -136,9 +179,23 @@ def ingest_image(user, key, content_type, note="", message_id=None, job_id=None)
     data = storage.get(key)
     ex = Extracted(kind="screenshot", url="", title=(note or "screenshot")[:80], text=note, source="screenshot")
     d = brain.digest(user, ex, note=note or "(screenshot, no caption)", images=[(content_type, data)], job_id=job_id)
-    iid = db.add_item(user["id"], url=None, kind=d.kind, source="screenshot", title=d.title, raw_text=d.summary, summary=d.summary,
-                      snippets=_clean_snippets(d.snippets), tags=d.tags, why=d.why_saved, read_minutes=d.read_minutes, note=note or None,
-                      message_id=message_id, media=[{"key": key, "type": content_type}], meta={"thumbnail_key": key})
+    iid = db.add_item(
+        user["id"],
+        url=None,
+        kind=d.kind,
+        source="screenshot",
+        title=d.title,
+        raw_text=d.summary,
+        summary=d.summary,
+        snippets=_clean_snippets(d.snippets),
+        tags=d.tags,
+        why=d.why_saved,
+        read_minutes=d.read_minutes,
+        note=note or None,
+        message_id=message_id,
+        media=[{"key": key, "type": content_type}],
+        meta={"thumbnail_key": key},
+    )
     db.count_new_items(user["id"])
     return db.get_item(user["id"], iid), d.ack, d.reaction
 
@@ -158,6 +215,7 @@ CMD = {
     "help": ("help", "?", "what can you do"),
     "login": ("login", "log in", "dashboard", "link", "website", "sign in"),
 }
+
 
 def command_for(text):
     t = re.sub(r"[^\w\s?']", "", text.lower()).strip()
@@ -179,7 +237,11 @@ def next_surface_and_log(user, force_kind=None):
     if not text:
         return None, None, None
     if item:
-        db.update_item(item["id"], surfaced_count=item["surfaced_count"] + 1, last_surfaced_at=db.q("SELECT now() AS t", one=True)["t"])
+        db.update_item(
+            item["id"],
+            surfaced_count=item["surfaced_count"] + 1,
+            last_surfaced_at=db.q("SELECT now() AS t", one=True)["t"],
+        )
     db.log_surface(user["id"], item["id"] if item else None, kind, text)
     return kind, item, text
 
@@ -213,9 +275,12 @@ def do_status(user):
     p = db.latest_profile(user["id"])
     pending = [s["at"][11:16] for s in todays_plan(user)["slots"] if not s["done"]]
     paused = (user.get("settings") or {}).get("paused")
-    return out(user, f"{n} saved, {unread} unread. profile built from {p['item_count'] if p else 0} items. "
-                     f"{'paused' if paused else 'active'}. today's drops left: {', '.join(pending) or 'none'}. "
-                     f"spent ${db.spend(user['id'], 1):.2f} today.")
+    return out(
+        user,
+        f"{n} saved, {unread} unread. profile built from {p['item_count'] if p else 0} items. "
+        f"{'paused' if paused else 'active'}. today's drops left: {', '.join(pending) or 'none'}. "
+        f"spent ${db.spend(user['id'], 1):.2f} today.",
+    )
 
 
 def do_login_code(user, phone=None):
@@ -226,6 +291,7 @@ def do_login_code(user, phone=None):
 
 
 # ---- inbound dispatcher -----------------------------------------------------------------
+
 
 def handle_message(job):
     msg = db.q("SELECT * FROM messages WHERE id = %s", (job["payload"]["message_id"],), one=True)
@@ -248,8 +314,17 @@ def handle_message(job):
                 out(user, C("spend_cap", why=why))
                 db.set_user_state(user["id"], cap_notified=time.strftime("%Y-%m-%d"))
             for u in urls[:3]:
-                db.add_item(user["id"], url=u, canonical_url=canonical(u), kind="link", title=u, summary="(pending)", status="pending",
-                            note=URL_RE.sub("", text).strip() or None, message_id=msg["id"])
+                db.add_item(
+                    user["id"],
+                    url=u,
+                    canonical_url=canonical(u),
+                    kind="link",
+                    title=u,
+                    summary="(pending)",
+                    status="pending",
+                    note=URL_RE.sub("", text).strip() or None,
+                    message_id=msg["id"],
+                )
             return
         instant_ack(user, msg, "like")
     elif text and not command_for(text):
@@ -264,14 +339,25 @@ def handle_message(job):
             except Exception as e:
                 log.exception("ingest failed for %s", u)
                 if not db.find_by_url(user["id"], canonical(u)):
-                    db.add_item(user["id"], url=u, canonical_url=canonical(u), kind="link", title=u, summary="(pending)", status="pending",
-                                note=note or None, message_id=msg["id"])
+                    db.add_item(
+                        user["id"],
+                        url=u,
+                        canonical_url=canonical(u),
+                        kind="link",
+                        title=u,
+                        summary="(pending)",
+                        status="pending",
+                        note=note or None,
+                        message_id=msg["id"],
+                    )
                 out(user, C("fetch_failed", error=type(e).__name__))
         return
     if images:
         for a in images[:2]:
             try:
-                item, ack, reaction = ingest_image(user, a["key"], a["content_type"], note=text, message_id=msg["id"], job_id=job["id"])
+                item, ack, reaction = ingest_image(
+                    user, a["key"], a["content_type"], note=text, message_id=msg["id"], job_id=job["id"]
+                )
                 react(user, msg, reaction)
                 out(user, ack)
             except Exception:
@@ -328,17 +414,29 @@ def handle_reaction(user, msg):
     reaction, target = meta.get("reaction"), meta.get("target_external_id")
     if not reaction or not target:
         return
-    ours = db.q("SELECT * FROM messages WHERE user_id = %s AND direction = 'out' AND external_id = %s", (user["id"], target), one=True)
+    ours = db.q(
+        "SELECT * FROM messages WHERE user_id = %s AND direction = 'out' AND external_id = %s",
+        (user["id"], target),
+        one=True,
+    )
     if not ours:
         return
-    surf = db.q("SELECT * FROM surfaces WHERE user_id = %s AND text = %s ORDER BY id DESC LIMIT 1", (user["id"], ours["text"]), one=True)
+    surf = db.q(
+        "SELECT * FROM surfaces WHERE user_id = %s AND text = %s ORDER BY id DESC LIMIT 1",
+        (user["id"], ours["text"]),
+        one=True,
+    )
     item_id = surf["item_id"] if surf else None
     if not item_id:
-        item = db.q("SELECT id FROM items WHERE user_id = %s AND message_id IS NOT NULL ORDER BY id DESC LIMIT 1", (user["id"],), one=True)
+        item = db.q(
+            "SELECT id FROM items WHERE user_id = %s AND message_id IS NOT NULL ORDER BY id DESC LIMIT 1",
+            (user["id"],),
+            one=True,
+        )
         item_id = item["id"] if item else None
     if item_id:
         it = db.get_item(user["id"], item_id)
-        reactions = list(((it.get("meta") or {}).get("reactions") or []))
+        reactions = list((it.get("meta") or {}).get("reactions") or [])
         reactions.append(reaction)
         db.update_item(item_id, meta={**(it.get("meta") or {}), "reactions": reactions[-10:]})
         if reaction == "dislike":
@@ -347,6 +445,7 @@ def handle_reaction(user, msg):
 
 
 # ---- periodic ------------------------------------------------------------------------------
+
 
 def surface_tick():
     for user in db.q("SELECT * FROM users WHERE status = 'active'"):
@@ -368,11 +467,18 @@ def do_proactive(user):
         return None
     choice = brain.proactive_choice(user, candidates)
     item = next((i for i in candidates if i["id"] == choice.item_id), None)
-    if not choice.send or not item or not 0 <= choice.excerpt_index < min(4, len(item["snippets"])) or not choice.connection.strip():
+    if (
+        not choice.send
+        or not item
+        or not 0 <= choice.excerpt_index < min(4, len(item["snippets"]))
+        or not choice.connection.strip()
+    ):
         return None
     # The model picks an index; it never writes or rewrites the quotation.
     quote = item["snippets"][choice.excerpt_index][:1000].strip().strip('“”"')
-    text = f"{choice.connection.strip()}\n\n“{quote}”\n— {item['title']}\n\n{DASHBOARD_URL.rstrip('/')}/items/{item['id']}"
+    text = (
+        f"{choice.connection.strip()}\n\n“{quote}”\n— {item['title']}\n\n{DASHBOARD_URL.rstrip('/')}/items/{item['id']}"
+    )
     with db.transaction():
         fresh = db.q("SELECT * FROM items WHERE id=%s AND user_id=%s FOR UPDATE", (item["id"], user["id"]), one=True)
         if not fresh or not memory.eligible(fresh):
@@ -380,8 +486,15 @@ def do_proactive(user):
         mid = out(user, text)
         if mid is None:
             return None
-        db.q("UPDATE messages SET meta=meta || %s WHERE id=%s", (db.J({"proactive": True, "item_id": item["id"], "reason": choice.reason}), mid))
-        db.update_item(item["id"], surfaced_count=fresh["surfaced_count"] + 1, last_surfaced_at=db.q("SELECT now() AS t", one=True)["t"])
+        db.q(
+            "UPDATE messages SET meta=meta || %s WHERE id=%s",
+            (db.J({"proactive": True, "item_id": item["id"], "reason": choice.reason}), mid),
+        )
+        db.update_item(
+            item["id"],
+            surfaced_count=fresh["surfaced_count"] + 1,
+            last_surfaced_at=db.q("SELECT now() AS t", one=True)["t"],
+        )
         db.log_surface(user["id"], item["id"], "proactive", text)
         return mid
 
@@ -395,10 +508,9 @@ def profile_tick():
             continue
         p = db.latest_profile(user["id"])
         stale = (not p) or (db.q("SELECT now() AS t", one=True)["t"] - p["created_at"]).total_seconds() > max_age * 3600
-        if n >= every or stale:
-            if db.spend_ok(user)[0]:
-                db.enqueue(user["id"], "refresh_profile")
-                db.set_user_state(user["id"], items_since_profile=0)
+        if (n >= every or stale) and db.spend_ok(user)[0]:
+            db.enqueue(user["id"], "refresh_profile")
+            db.set_user_state(user["id"], items_since_profile=0)
 
 
 def retry_pending():

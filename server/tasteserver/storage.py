@@ -9,9 +9,14 @@ _client = None
 def client():
     global _client
     if _client is None:
-        _client = boto3.client("s3", endpoint_url=S3_ENDPOINT or None, region_name=S3_REGION,
-                               aws_access_key_id=S3_ACCESS_KEY or None, aws_secret_access_key=S3_SECRET_KEY or None,
-                               config=Config(signature_version="s3v4", s3={"addressing_style": "virtual"}))
+        _client = boto3.client(
+            "s3",
+            endpoint_url=S3_ENDPOINT or None,
+            region_name=S3_REGION,
+            aws_access_key_id=S3_ACCESS_KEY or None,
+            aws_secret_access_key=S3_SECRET_KEY or None,
+            config=Config(signature_version="s3v4", s3={"addressing_style": "virtual"}),
+        )
     return _client
 
 
@@ -37,5 +42,6 @@ def usage():
     paginator = client().get_paginator("list_objects_v2")
     for page in paginator.paginate(Bucket=S3_BUCKET):
         for o in page.get("Contents", []):
-            total += o["Size"]; n += 1
+            total += o["Size"]
+            n += 1
     return {"bytes": total, "objects": n}

@@ -9,8 +9,7 @@ from psycopg_pool import ConnectionPool
 
 from .config import DATABASE_URL, DEFAULT_SETTINGS
 
-pool = ConnectionPool(conninfo=DATABASE_URL, min_size=1, max_size=8, open=False,
-                      kwargs={"row_factory": dict_row})
+pool = ConnectionPool(conninfo=DATABASE_URL, min_size=1, max_size=8, open=False, kwargs={"row_factory": dict_row})
 _transaction = ContextVar("taste_transaction", default=None)
 
 
@@ -33,13 +32,12 @@ def conn():
 @contextmanager
 def transaction():
     """Make related q() calls commit together, including calls in helper modules."""
-    with conn() as c:
-        with c.transaction():
-            token = _transaction.set(c)
-            try:
-                yield c
-            finally:
-                _transaction.reset(token)
+    with conn() as c, c.transaction():
+        token = _transaction.set(c)
+        try:
+            yield c
+        finally:
+            _transaction.reset(token)
 
 
 def q(sql, params=None, one=False):
@@ -81,11 +79,15 @@ def setting(key):
 
 
 def set_setting(key, value):
-    q("INSERT INTO settings(key, value) VALUES (%s, %s) ON CONFLICT (key) DO UPDATE SET value = excluded.value", (key, Jsonb(value)))
+    q(
+        "INSERT INTO settings(key, value) VALUES (%s, %s) ON CONFLICT (key) DO UPDATE SET value = excluded.value",
+        (key, Jsonb(value)),
+    )
     _settings_cache["at"] = 0
 
 
 # ---- users ------------------------------------------------------------------
+
 
 def get_user(user_id):
     return q("SELECT * FROM users WHERE id = %s", (user_id,), one=True)
@@ -109,11 +111,15 @@ def set_user_state(user_id, **patch):
 
 def count_new_items(user_id, n=1):
     """New evidence since the last profile build; the worker rebuilds once enough piles up."""
-    q("""UPDATE users SET state = state || jsonb_build_object('items_since_profile',
-             COALESCE((state->>'items_since_profile')::int, 0) + %s) WHERE id = %s""", (n, user_id))
+    q(
+        """UPDATE users SET state = state || jsonb_build_object('items_since_profile',
+             COALESCE((state->>'items_since_profile')::int, 0) + %s) WHERE id = %s""",
+        (n, user_id),
+    )
 
 
 # ---- items ------------------------------------------------------------------
+
 
 def add_item(user_id, **f):
     f["user_id"] = user_id
@@ -139,24 +145,33 @@ def get_item(user_id, item_id):
 
 
 def find_by_url(user_id, url):
-    return q("SELECT * FROM items WHERE user_id = %s AND (url = %s OR canonical_url = %s) ORDER BY id DESC LIMIT 1",
-             (user_id, url, url), one=True)
+    return q(
+        "SELECT * FROM items WHERE user_id = %s AND (url = %s OR canonical_url = %s) ORDER BY id DESC LIMIT 1",
+        (user_id, url, url),
+        one=True,
+    )
 
 
 def list_items(user_id, limit=50, status=None, offset=0, kind=None):
-    w = ["user_id = %s"]; p = [user_id]
+    w = ["user_id = %s"]
+    p = [user_id]
     if status:
-        w.append("status = %s"); p.append(status)
+        w.append("status = %s")
+        p.append(status)
     if kind:
-        w.append("kind = %s"); p.append(kind)
+        w.append("kind = %s")
+        p.append(kind)
     p += [limit, offset]
     return q(f"SELECT * FROM items WHERE {' AND '.join(w)} ORDER BY id DESC LIMIT %s OFFSET %s", p)
 
 
 def search_items(user_id, query, limit=10):
-    return q("""SELECT *, ts_rank(tsv, websearch_to_tsquery('english', %s)) AS rank FROM items
+    return q(
+        """SELECT *, ts_rank(tsv, websearch_to_tsquery('english', %s)) AS rank FROM items
                 WHERE user_id = %s AND tsv @@ websearch_to_tsquery('english', %s)
-                ORDER BY rank DESC, id DESC LIMIT %s""", (query, user_id, query, limit))
+                ORDER BY rank DESC, id DESC LIMIT %s""",
+        (query, user_id, query, limit),
+    )
 
 
 def count_items(user_id, status=None):
@@ -167,9 +182,12 @@ def count_items(user_id, status=None):
 
 # ---- profile / surfaces / chat ------------------------------------------------
 
+
 def save_profile(user_id, text, observations, one_liner, item_count):
-    q("INSERT INTO profiles(user_id, text, observations, one_liner, item_count) VALUES (%s, %s, %s, %s, %s)",
-      (user_id, text, Jsonb(observations), one_liner, item_count))
+    q(
+        "INSERT INTO profiles(user_id, text, observations, one_liner, item_count) VALUES (%s, %s, %s, %s, %s)",
+        (user_id, text, Jsonb(observations), one_liner, item_count),
+    )
 
 
 def latest_profile(user_id):
@@ -189,72 +207,105 @@ def add_chat(user_id, role, content):
 
 
 def recent_chat(user_id, n=12, max_age_hours=12):
-    rows = q("""SELECT role, content FROM chat_turns WHERE user_id = %s AND created_at > now() - make_interval(hours => %s)
-                ORDER BY id DESC LIMIT %s""", (user_id, max_age_hours, n))
+    rows = q(
+        """SELECT role, content FROM chat_turns WHERE user_id = %s AND created_at > now() - make_interval(hours => %s)
+                ORDER BY id DESC LIMIT %s""",
+        (user_id, max_age_hours, n),
+    )
     return list(reversed(rows))
 
 
 # ---- messages (in/out) ---------------------------------------------------------
 
+
 def queue_outbound(user_id, text, handle_id=None, meta=None):
-    return q("INSERT INTO messages(user_id, direction, handle_id, text, status, meta) VALUES (%s, 'out', %s, %s, 'queued', %s) RETURNING id",
-             (user_id, handle_id, text, Jsonb(meta or {})), one=True)["id"]
+    return q(
+        "INSERT INTO messages(user_id, direction, handle_id, text, status, meta) VALUES (%s, 'out', %s, %s, 'queued', %s) RETURNING id",
+        (user_id, handle_id, text, Jsonb(meta or {})),
+        one=True,
+    )["id"]
 
 
 def last_inbound(user_id):
-    return q("SELECT * FROM messages WHERE user_id = %s AND direction = 'in' ORDER BY id DESC LIMIT 1", (user_id,), one=True)
+    return q(
+        "SELECT * FROM messages WHERE user_id = %s AND direction = 'in' ORDER BY id DESC LIMIT 1", (user_id,), one=True
+    )
 
 
 def outbound_sends_last_hour(user_id):
-    return q("SELECT COUNT(*) AS n FROM messages WHERE user_id = %s AND direction = 'out' AND created_at > now() - interval '1 hour'",
-             (user_id,), one=True)["n"]
+    return q(
+        "SELECT COUNT(*) AS n FROM messages WHERE user_id = %s AND direction = 'out' AND created_at > now() - interval '1 hour'",
+        (user_id,),
+        one=True,
+    )["n"]
 
 
 # ---- jobs ------------------------------------------------------------------------
 
+
 def enqueue(user_id, type_, payload=None, run_after=None):
-    return q("INSERT INTO jobs(user_id, type, payload, run_after) VALUES (%s, %s, %s, COALESCE(%s, now())) RETURNING id",
-             (user_id, type_, Jsonb(payload or {}), run_after), one=True)["id"]
+    return q(
+        "INSERT INTO jobs(user_id, type, payload, run_after) VALUES (%s, %s, %s, COALESCE(%s, now())) RETURNING id",
+        (user_id, type_, Jsonb(payload or {}), run_after),
+        one=True,
+    )["id"]
 
 
 def claim_job(worker_id):
-    return q("""UPDATE jobs SET status = 'running', locked_at = now(), locked_by = %s, attempts = attempts + 1
+    return q(
+        """UPDATE jobs SET status = 'running', locked_at = now(), locked_by = %s, attempts = attempts + 1
                 WHERE id = (SELECT id FROM jobs WHERE status = 'queued' AND run_after <= now()
                             ORDER BY id FOR UPDATE SKIP LOCKED LIMIT 1)
-                RETURNING *""", (worker_id,), one=True)
+                RETURNING *""",
+        (worker_id,),
+        one=True,
+    )
 
 
 def finish_job(job_id, ok, error=None, retry_in=None):
     if ok:
         q("UPDATE jobs SET status = 'done', finished_at = now(), error = NULL WHERE id = %s", (job_id,))
     elif retry_in is not None:
-        q("UPDATE jobs SET status = 'queued', run_after = now() + make_interval(secs => %s), error = %s WHERE id = %s",
-          (retry_in, (error or "")[:2000], job_id))
+        q(
+            "UPDATE jobs SET status = 'queued', run_after = now() + make_interval(secs => %s), error = %s WHERE id = %s",
+            (retry_in, (error or "")[:2000], job_id),
+        )
     else:
-        q("UPDATE jobs SET status = 'failed', finished_at = now(), error = %s WHERE id = %s", ((error or "")[:2000], job_id))
+        q(
+            "UPDATE jobs SET status = 'failed', finished_at = now(), error = %s WHERE id = %s",
+            ((error or "")[:2000], job_id),
+        )
 
 
 # ---- usage / spend ----------------------------------------------------------------
+
 
 def record_usage(user_id, kind, model, input_tokens=0, output_tokens=0, cached_tokens=0, seconds=0.0, job_id=None):
     prices = setting("model_prices") or {}
     p = prices.get(model, {})
     cost = 0.0
     if "in" in p:
-        cost = (max(input_tokens - cached_tokens, 0) * p.get("in", 0) + cached_tokens * p.get("cached_in", 0)
-                + output_tokens * p.get("out", 0)) / 1_000_000
+        cost = (
+            max(input_tokens - cached_tokens, 0) * p.get("in", 0)
+            + cached_tokens * p.get("cached_in", 0)
+            + output_tokens * p.get("out", 0)
+        ) / 1_000_000
     if "per_minute" in p:
         cost += seconds / 60 * p["per_minute"]
-    q("""INSERT INTO usage(user_id, kind, model, input_tokens, output_tokens, cached_tokens, seconds, cost_usd, job_id)
+    q(
+        """INSERT INTO usage(user_id, kind, model, input_tokens, output_tokens, cached_tokens, seconds, cost_usd, job_id)
          VALUES (%s, %s, %s, %s, %s, %s, %s, %s, %s)""",
-      (user_id, kind, model, input_tokens, output_tokens, cached_tokens, seconds, cost, job_id))
+        (user_id, kind, model, input_tokens, output_tokens, cached_tokens, seconds, cost, job_id),
+    )
     return cost
 
 
 def spend(user_id=None, days=1):
-    w = "created_at > now() - make_interval(days => %s)"; p = [days]
+    w = "created_at > now() - make_interval(days => %s)"
+    p = [days]
     if user_id:
-        w += " AND user_id = %s"; p.append(user_id)
+        w += " AND user_id = %s"
+        p.append(user_id)
     return float(q(f"SELECT COALESCE(SUM(cost_usd), 0) AS c FROM usage WHERE {w}", p, one=True)["c"])
 
 
@@ -272,6 +323,9 @@ def spend_ok(user):
 
 # ---- audit ------------------------------------------------------------------------
 
+
 def audit(actor_key_id, user_id, action, detail=None):
-    q("INSERT INTO audit_log(actor_key_id, user_id, action, detail) VALUES (%s, %s, %s, %s)",
-      (actor_key_id, user_id, action, Jsonb(detail or {})))
+    q(
+        "INSERT INTO audit_log(actor_key_id, user_id, action, detail) VALUES (%s, %s, %s, %s)",
+        (actor_key_id, user_id, action, Jsonb(detail or {})),
+    )

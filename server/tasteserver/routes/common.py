@@ -1,4 +1,5 @@
 """Helpers shared by the route modules."""
+
 from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
 from fastapi import HTTPException
@@ -19,7 +20,9 @@ IMAGE_TYPES = {"image/jpeg": "jpg", "image/png": "png", "image/gif": "gif", "ima
 def clean_row(row):
     if row is None:
         return None
-    d = dict(row); d.pop("tsv", None); d.pop("key_hash", None)
+    d = dict(row)
+    d.pop("tsv", None)
+    d.pop("key_hash", None)
     return d
 
 

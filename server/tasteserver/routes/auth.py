@@ -1,17 +1,17 @@
 """Phone login: a six-digit code texted to a registered number, exchanged for a 30-day user key."""
-from fastapi import APIRouter, Depends, Request
+
+from fastapi import APIRouter, Request
 from pydantic import BaseModel, Field
 
 from .. import blooio, db, login, ratelimit
-from ..auth import Principal, require
+from ..auth import USER, Principal
 
 router = APIRouter()
 
 
 @router.get("/v1/public/config")
 def public_config():
-    return {"phone": blooio.NUMBER if blooio.enabled() else None,
-            "open_signup": bool(db.setting("open_signup"))}
+    return {"phone": blooio.NUMBER if blooio.enabled() else None, "open_signup": bool(db.setting("open_signup"))}
 
 
 class AuthRequest(BaseModel):
@@ -45,6 +45,6 @@ def auth_exchange(body: AuthExchange, request: Request):
 
 
 @router.post("/v1/auth/logout")
-def auth_logout(p: Principal = Depends(require("user"))):
+def auth_logout(p: Principal = USER):
     db.q("UPDATE api_keys SET revoked_at = now() WHERE id = %s", (p.key_id,))
     return {"ok": True}

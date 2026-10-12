@@ -1,4 +1,5 @@
 """SSRF-safe HTTP fetching: public addresses only, checked at connect time, size-capped."""
+
 import ipaddress
 import socket
 from urllib.parse import urlparse
@@ -8,8 +9,9 @@ import httpx
 
 from .config import MAX_FETCH_BYTES
 
-UA = ("Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) AppleWebKit/605.1.15 "
-      "(KHTML, like Gecko) Version/17.5 Safari/605.1.15")
+UA = (
+    "Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.5 Safari/605.1.15"
+)
 HEADERS = {"User-Agent": UA, "Accept-Language": "en-US,en;q=0.9"}
 
 
@@ -56,8 +58,13 @@ class _PinnedBackend(httpcore.SyncBackend):
     again would leave a DNS-rebinding window. TLS still verifies against the original hostname."""
 
     def connect_tcp(self, host, port, timeout=None, local_address=None, socket_options=None):
-        return super().connect_tcp(resolve_public(host, port), port, timeout=timeout,
-                                   local_address=local_address, socket_options=socket_options)
+        return super().connect_tcp(
+            resolve_public(host, port),
+            port,
+            timeout=timeout,
+            local_address=local_address,
+            socket_options=socket_options,
+        )
 
 
 class _GuardedTransport(httpx.HTTPTransport):
@@ -70,8 +77,9 @@ def get(url, headers=None, params=None, timeout=25, max_bytes=MAX_FETCH_BYTES, m
     """GET with per-hop URL checks, connect-time address checks and a byte cap. Returns httpx.Response."""
     h = dict(HEADERS)
     h.update(headers or {})
-    with httpx.Client(headers=h, follow_redirects=False, timeout=timeout, transport=_GuardedTransport(),
-                      trust_env=False) as c:
+    with httpx.Client(
+        headers=h, follow_redirects=False, timeout=timeout, transport=_GuardedTransport(), trust_env=False
+    ) as c:
         for _ in range(max_redirects + 1):
             check_url(url)
             with c.stream("GET", url, params=params) as r:

@@ -1,4 +1,5 @@
 """URL -> text. Every network call goes through netguard (SSRF-safe, size-capped)."""
+
 import html as html_mod
 import json
 import os
@@ -14,10 +15,40 @@ import trafilatura
 from . import netguard
 from .config import MAX_TEXT_CHARS, YTDLP_PROXY
 
-TRACKERS = {"utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content", "fbclid", "gclid", "igshid",
-            "si", "ref_src", "ref_url", "s", "t", "feature", "_r", "mc_cid", "mc_eid"}
-SHORTENERS = {"t.co", "vm.tiktok.com", "vt.tiktok.com", "redd.it", "bit.ly", "tinyurl.com", "youtu.be", "a.co",
-              "amzn.to", "lnkd.in", "buff.ly", "ow.ly", "l.instagram.com"}
+TRACKERS = {
+    "utm_source",
+    "utm_medium",
+    "utm_campaign",
+    "utm_term",
+    "utm_content",
+    "fbclid",
+    "gclid",
+    "igshid",
+    "si",
+    "ref_src",
+    "ref_url",
+    "s",
+    "t",
+    "feature",
+    "_r",
+    "mc_cid",
+    "mc_eid",
+}
+SHORTENERS = {
+    "t.co",
+    "vm.tiktok.com",
+    "vt.tiktok.com",
+    "redd.it",
+    "bit.ly",
+    "tinyurl.com",
+    "youtu.be",
+    "a.co",
+    "amzn.to",
+    "lnkd.in",
+    "buff.ly",
+    "ow.ly",
+    "l.instagram.com",
+}
 
 
 @dataclass
@@ -30,7 +61,7 @@ class Extracted:
     source: str = ""
     meta: dict = field(default_factory=dict)
     error: str = ""
-    media_url: str = ""      # set when yt-dlp found downloadable media
+    media_url: str = ""  # set when yt-dlp found downloadable media
     thumbnail: str = ""
 
 
@@ -77,8 +108,17 @@ def extract(url):
         url = netguard.resolve(url)
     netguard.check_url(url)
     kind = classify(url)
-    fn = {"tweet": _tweet, "reddit": _reddit, "tiktok": _ytdlp, "youtube": _ytdlp, "instagram": _ytdlp,
-          "book": _book_page, "film": _article, "pdf": _article, "article": _article}[kind]
+    fn = {
+        "tweet": _tweet,
+        "reddit": _reddit,
+        "tiktok": _ytdlp,
+        "youtube": _ytdlp,
+        "instagram": _ytdlp,
+        "book": _book_page,
+        "film": _article,
+        "pdf": _article,
+        "article": _article,
+    }[kind]
     try:
         ex = fn(url)
     except netguard.Blocked:
@@ -91,6 +131,7 @@ def extract(url):
 
 
 # ---- tweets ----------------------------------------------------------------
+
 
 def _tweet(url):
     m = re.search(r"/(?:status|statuses)/(\d+)", url)
@@ -111,10 +152,19 @@ def _tweet(url):
     photos = [x for x in media.get("all", []) if x.get("type") == "photo"]
     author = t.get("author", {})
     return Extracted(
-        kind="tweet", url=t.get("url", url), title=(t.get("text", "")[:80]).replace("\n", " "),
-        author=f"{author.get('name', '')} (@{author.get('screen_name', '')})", text="\n".join(parts), source="x.com",
-        meta={"likes": t.get("likes"), "replies": t.get("replies"), "created_at": t.get("created_at"),
-              "photos": [p.get("url") for p in photos][:4], "author_avatar": author.get("avatar_url")},
+        kind="tweet",
+        url=t.get("url", url),
+        title=(t.get("text", "")[:80]).replace("\n", " "),
+        author=f"{author.get('name', '')} (@{author.get('screen_name', '')})",
+        text="\n".join(parts),
+        source="x.com",
+        meta={
+            "likes": t.get("likes"),
+            "replies": t.get("replies"),
+            "created_at": t.get("created_at"),
+            "photos": [p.get("url") for p in photos][:4],
+            "author_avatar": author.get("avatar_url"),
+        },
         media_url=url if videos else "",
         thumbnail=(photos[0].get("url") if photos else ""),
     )
@@ -131,8 +181,13 @@ def _reddit_auth():
         return None
     if _reddit_token["value"] and time.time() < _reddit_token["exp"] - 60:
         return _reddit_token["value"]
-    r = httpx.post("https://www.reddit.com/api/v1/access_token", auth=(cid, sec), data={"grant_type": "client_credentials"},
-                   headers={"User-Agent": "taste-agent/0.2 (personal reading assistant)"}, timeout=20)
+    r = httpx.post(
+        "https://www.reddit.com/api/v1/access_token",
+        auth=(cid, sec),
+        data={"grant_type": "client_credentials"},
+        headers={"User-Agent": "taste-agent/0.2 (personal reading assistant)"},
+        timeout=20,
+    )
     r.raise_for_status()
     j = r.json()
     _reddit_token["value"] = j["access_token"]
@@ -147,8 +202,11 @@ def _reddit(url):
     token = _reddit_auth()
     if not token:
         raise RuntimeError("reddit credentials not configured")
-    r = netguard.get(f"https://oauth.reddit.com/comments/{m.group(1)}", params={"raw_json": 1, "limit": 40},
-                     headers={"Authorization": f"bearer {token}", "User-Agent": "taste-agent/0.2"})
+    r = netguard.get(
+        f"https://oauth.reddit.com/comments/{m.group(1)}",
+        params={"raw_json": 1, "limit": 40},
+        headers={"Authorization": f"bearer {token}", "User-Agent": "taste-agent/0.2"},
+    )
     r.raise_for_status()
     data = r.json()
     post = data[0]["data"]["children"][0]["data"]
@@ -161,20 +219,27 @@ def _reddit(url):
                 parts.append(f"\n[linked page: {linked.title}]\n{linked.text[:8000]}")
         except Exception:
             pass
-    comments = [f"u/{d.get('author')} (+{d.get('score', 0)}): {d['body']}"
-                for ch in data[1]["data"]["children"][:15]
-                if ch.get("kind") == "t1" and (d := ch.get("data", {})).get("body")]
+    comments = [
+        f"u/{d.get('author')} (+{d.get('score', 0)}): {d['body']}"
+        for ch in data[1]["data"]["children"][:15]
+        if ch.get("kind") == "t1" and (d := ch.get("data", {})).get("body")
+    ]
     if comments:
         parts.append("\n--- top comments ---\n" + "\n\n".join(comments))
     return Extracted(
-        kind="reddit", url=f"https://www.reddit.com{post.get('permalink', '')}", title=post.get("title", ""),
-        author=f"u/{post.get('author', '')}", text="\n".join(p for p in parts if p), source=f"r/{post.get('subreddit')}",
+        kind="reddit",
+        url=f"https://www.reddit.com{post.get('permalink', '')}",
+        title=post.get("title", ""),
+        author=f"u/{post.get('author', '')}",
+        text="\n".join(p for p in parts if p),
+        source=f"r/{post.get('subreddit')}",
         meta={"score": post.get("score"), "num_comments": post.get("num_comments"), "link": link},
         thumbnail=post.get("thumbnail") if str(post.get("thumbnail", "")).startswith("http") else "",
     )
 
 
 # ---- anything yt-dlp knows ---------------------------------------------------
+
 
 def ytdlp_info(url, timeout=90):
     cmd = ["yt-dlp", "-J", "--no-warnings", "--skip-download", "--no-playlist", "--socket-timeout", "30"]
@@ -210,12 +275,25 @@ def _ytdlp(url):
     if comments:
         parts.append("\n--- comments ---\n" + "\n".join(comments))
     return Extracted(
-        kind=kind, url=info.get("webpage_url") or url, title=title, author=author, text="\n".join(parts),
+        kind=kind,
+        url=info.get("webpage_url") or url,
+        title=title,
+        author=author,
+        text="\n".join(parts),
         source=info.get("extractor_key", kind),
-        meta={"duration": info.get("duration"), "views": info.get("view_count"), "likes": info.get("like_count"),
-              "has_captions": bool(transcript), "upload_date": info.get("upload_date"),
-              "author_avatar": next((t.get("url") for t in (info.get("thumbnails") or []) if str(t.get("id", "")).startswith("avatar")), None)},
-        media_url=url if info.get("duration") else "", thumbnail=info.get("thumbnail") or "",
+        meta={
+            "duration": info.get("duration"),
+            "views": info.get("view_count"),
+            "likes": info.get("like_count"),
+            "has_captions": bool(transcript),
+            "upload_date": info.get("upload_date"),
+            "author_avatar": next(
+                (t.get("url") for t in (info.get("thumbnails") or []) if str(t.get("id", "")).startswith("avatar")),
+                None,
+            ),
+        },
+        media_url=url if info.get("duration") else "",
+        thumbnail=info.get("thumbnail") or "",
     )
 
 
@@ -235,7 +313,9 @@ def _captions(info):
 def _fetch_caption(url, ext):
     body = netguard.get(url).text
     if ext == "json3":
-        text = "".join(seg.get("utf8", "") for ev in json.loads(body).get("events", []) for seg in (ev.get("segs") or []))
+        text = "".join(
+            seg.get("utf8", "") for ev in json.loads(body).get("events", []) for seg in (ev.get("segs") or [])
+        )
     else:
         lines = []
         for line in body.splitlines():
@@ -254,39 +334,60 @@ def _oembed(url, kind):
         return None
     try:
         d = netguard.get(ep, params={"url": url}).json()
-        return Extracted(kind=kind, url=url, title=d.get("title", ""), author=d.get("author_name", ""),
-                         text=d.get("title", ""), source=d.get("provider_name", kind), meta={"oembed_only": True},
-                         thumbnail=d.get("thumbnail_url", ""))
+        return Extracted(
+            kind=kind,
+            url=url,
+            title=d.get("title", ""),
+            author=d.get("author_name", ""),
+            text=d.get("title", ""),
+            source=d.get("provider_name", kind),
+            meta={"oembed_only": True},
+            thumbnail=d.get("thumbnail_url", ""),
+        )
     except Exception:
         return None
 
 
 # ---- articles ---------------------------------------------------------------
 
+
 def _article(url):
     r = netguard.get(url)
     r.raise_for_status()
     final = str(r.url)
     if "pdf" in r.headers.get("content-type", "") or final.lower().endswith(".pdf"):
-        return Extracted(kind="pdf", url=final, title=final.rsplit("/", 1)[-1], text="", error="pdf extraction not implemented yet")
-    j = trafilatura.extract(r.text, url=final, output_format="json", with_metadata=True, include_comments=False, favor_recall=True)
+        return Extracted(
+            kind="pdf", url=final, title=final.rsplit("/", 1)[-1], text="", error="pdf extraction not implemented yet"
+        )
+    j = trafilatura.extract(
+        r.text, url=final, output_format="json", with_metadata=True, include_comments=False, favor_recall=True
+    )
     if not j:
         raise RuntimeError("could not extract readable text")
     d = json.loads(j)
     m = re.search(r'<meta property="og:image" content="([^"]+)"', r.text)
-    return Extracted(kind="article", url=final, title=d.get("title") or "", author=d.get("author") or "",
-                     text=d.get("text") or "", source=d.get("sitename") or urlparse(final).netloc,
-                     meta={"date": d.get("date"), "description": d.get("description")},
-                     thumbnail=html_mod.unescape(m.group(1)) if m else "")
+    return Extracted(
+        kind="article",
+        url=final,
+        title=d.get("title") or "",
+        author=d.get("author") or "",
+        text=d.get("text") or "",
+        source=d.get("sitename") or urlparse(final).netloc,
+        meta={"date": d.get("date"), "description": d.get("description")},
+        thumbnail=html_mod.unescape(m.group(1)) if m else "",
+    )
 
 
 # ---- books ------------------------------------------------------------------
+
 
 def _book_page(url):
     title = ""
     try:
         html = netguard.get(url).text
-        m = re.search(r'<meta property="og:title" content="([^"]+)"', html) or re.search(r"<title>([^<]+)</title>", html)
+        m = re.search(r'<meta property="og:title" content="([^"]+)"', html) or re.search(
+            r"<title>([^<]+)</title>", html
+        )
         if m:
             title = html_mod.unescape(m.group(1))
             title = re.sub(r"\s*(\||by|:)\s*(Goodreads|Amazon).*$", "", title).replace("…", "").strip()
@@ -301,8 +402,10 @@ def _book_page(url):
 
 
 def lookup_book(query):
-    r = netguard.get("https://openlibrary.org/search.json",
-                     params={"q": query, "limit": 3, "fields": "key,title,author_name,first_publish_year,subject,cover_i"})
+    r = netguard.get(
+        "https://openlibrary.org/search.json",
+        params={"q": query, "limit": 3, "fields": "key,title,author_name,first_publish_year,subject,cover_i"},
+    )
     r.raise_for_status()
     docs = r.json().get("docs") or []
     if not docs:
@@ -320,5 +423,13 @@ def lookup_book(query):
     subjects = ", ".join((d.get("subject") or [])[:12])
     text = f"{d.get('title')} by {author} ({d.get('first_publish_year', '?')})\n\n{desc}\n\nsubjects: {subjects}"
     cover = f"https://covers.openlibrary.org/b/id/{d['cover_i']}-L.jpg" if d.get("cover_i") else ""
-    return Extracted(kind="book", url=f"https://openlibrary.org{d['key']}", title=d.get("title", query), author=author,
-                     text=text, source="openlibrary", meta={"year": d.get("first_publish_year")}, thumbnail=cover)
+    return Extracted(
+        kind="book",
+        url=f"https://openlibrary.org{d['key']}",
+        title=d.get("title", query),
+        author=author,
+        text=text,
+        source="openlibrary",
+        meta={"year": d.get("first_publish_year")},
+        thumbnail=cover,
+    )

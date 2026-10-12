@@ -1,4 +1,5 @@
 """Job runner + periodic ticks."""
+
 import logging
 import os
 import socket
@@ -6,9 +7,9 @@ import threading
 import time
 
 from . import db, dispatch, handlers, ratelimit
-from .netguard import Blocked
 from .config import WORKER_CONCURRENCY
 from .connections import sync_all_due
+from .netguard import Blocked
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name)s %(message)s")
 log = logging.getLogger("taste.worker")
@@ -22,9 +23,12 @@ def job_loop(n):
         try:
             job = db.claim_job(wid)
         except Exception:
-            log.exception("claim failed"); time.sleep(5); continue
+            log.exception("claim failed")
+            time.sleep(5)
+            continue
         if not job:
-            time.sleep(1.5); continue
+            time.sleep(1.5)
+            continue
         t0 = time.time()
         try:
             handlers.run_job(job)
@@ -33,7 +37,9 @@ def job_loop(n):
         except Exception as e:
             retry = job["attempts"] < MAX_ATTEMPTS and not isinstance(e, Blocked)
             log.exception("job %s %s failed (attempt %s)", job["id"], job["type"], job["attempts"])
-            db.finish_job(job["id"], False, error=f"{type(e).__name__}: {e}", retry_in=60 * job["attempts"] if retry else None)
+            db.finish_job(
+                job["id"], False, error=f"{type(e).__name__}: {e}", retry_in=60 * job["attempts"] if retry else None
+            )
 
 
 def dispatch_loop():
@@ -52,7 +58,9 @@ def tick_loop():
             handlers.surface_tick()
             handlers.profile_tick()
             # requeue jobs whose worker died mid-run
-            db.q("UPDATE jobs SET status = 'queued', locked_by = NULL WHERE status = 'running' AND locked_at < now() - interval '15 minutes'")
+            db.q(
+                "UPDATE jobs SET status = 'queued', locked_by = NULL WHERE status = 'running' AND locked_at < now() - interval '15 minutes'"
+            )
             if time.time() - last_hourly > 3600:
                 last_hourly = time.time()
                 sync_all_due()

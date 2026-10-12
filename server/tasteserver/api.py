@@ -1,4 +1,5 @@
 """The API process: middleware, startup, and the route modules under routes/."""
+
 import hashlib
 import logging
 import os
@@ -27,8 +28,10 @@ def bootstrap():
     if db.q("SELECT 1 FROM api_keys LIMIT 1"):
         return
     h = hashlib.sha256(raw.encode()).hexdigest()
-    db.q("INSERT INTO api_keys(user_id, name, key_hash, prefix, scopes) VALUES (NULL, 'bootstrap admin', %s, %s, %s)",
-         (h, raw[:10], ["admin"]))
+    db.q(
+        "INSERT INTO api_keys(user_id, name, key_hash, prefix, scopes) VALUES (NULL, 'bootstrap admin', %s, %s, %s)",
+        (h, raw[:10], ["admin"]),
+    )
     log.info("bootstrap admin key created")
 
 
