@@ -17,6 +17,7 @@ export async function login(formData: FormData) {
 export async function logout() { await clearSession(); redirect("/admin/login"); }
 
 export async function pickUser(formData: FormData) {
+  await requireSession();
   await setCurrentUserId(String(formData.get("uid")));
   revalidatePath("/admin", "layout");
 }
