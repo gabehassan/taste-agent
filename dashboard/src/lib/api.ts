@@ -11,7 +11,7 @@ export class ApiError extends Error {
 
 // Every request made with the admin key runs on behalf of a signed-in admin. Server actions are
 // public POST endpoints, so this check cannot live only in the pages that render the forms.
-export async function api<T = any>(path: string, init: RequestInit & { userId?: string | null } = {}): Promise<T> {
+export async function api<T = unknown>(path: string, init: RequestInit & { userId?: string | null } = {}): Promise<T> {
   await requireSession();
   const { userId, ...rest } = init;
   const url = new URL(path, BASE);

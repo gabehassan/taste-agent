@@ -1,6 +1,7 @@
 import UserShell, { me } from "../user-shell";
 import Block, { Grid } from "@/components/block";
 import { Fade } from "@/components/motion";
+import type { ItemList } from "@/lib/types";
 import { relTime, userApi } from "@/lib/user";
 import { saveUrl } from "../user-actions";
 
@@ -10,7 +11,7 @@ export default async function Items({ searchParams }: { searchParams: Promise<{ 
   const { q, status, queued } = await searchParams;
   const m = await me();
   const qs = new URLSearchParams({ limit: "150" }); if (q) qs.set("q", q); if (status) qs.set("status", status);
-  const { items, total } = await userApi(`/v1/items?${qs}`);
+  const { items, total } = await userApi<ItemList>(`/v1/items?${qs}`);
   return (
     <UserShell name={m.user.name || ""}>
       <Fade>
@@ -29,7 +30,7 @@ export default async function Items({ searchParams }: { searchParams: Promise<{ 
         {queued && <p className="mono u-faint mb-6">on it. give it a minute.</p>}
       </Fade>
       {items.length === 0 ? <div className="u-muted py-16 text-center">nothing here.</div>
-        : <Grid>{items.map((it: any, i: number) => <Block key={it.id} it={it} rel={relTime(it.created_at)} index={i} />)}</Grid>}
+        : <Grid>{items.map((it, i) => <Block key={it.id} it={it} rel={relTime(it.created_at)} index={i} />)}</Grid>}
     </UserShell>
   );
 }

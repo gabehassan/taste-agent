@@ -2,6 +2,7 @@ import Link from "next/link";
 import Shell, { actingUser } from "@/app/admin/shell";
 import { api, fmtDate } from "@/lib/api";
 import { requireSession } from "@/lib/session";
+import type { ItemList } from "@/lib/types";
 import { ingestUrl } from "@/app/admin/actions";
 
 export default async function Items({ searchParams }: { searchParams: Promise<{ q?: string; status?: string }> }) {
@@ -10,7 +11,7 @@ export default async function Items({ searchParams }: { searchParams: Promise<{ 
   const user = await actingUser();
   if (!user) return <Shell title="items"><p className="muted">no users yet. create one under users.</p></Shell>;
   const qs = new URLSearchParams({ limit: "100" }); if (q) qs.set("q", q); if (status) qs.set("status", status);
-  const { items, total } = await api(`/v1/items?${qs}`, { userId: user.id });
+  const { items, total } = await api<ItemList>(`/v1/items?${qs}`, { userId: user.id });
   return (
     <Shell title={`items · ${user.name || user.email}`}>
       <div className="flex gap-3 mb-4 items-end flex-wrap">
@@ -19,9 +20,9 @@ export default async function Items({ searchParams }: { searchParams: Promise<{ 
       </div>
       <div className="muted text-sm mb-2">{total} total</div>
       <table className="w-full"><thead><tr><th>title</th><th>kind</th><th>tags</th><th>status</th><th>saved</th></tr></thead><tbody>
-        {items.map((i: any) => (
+        {items.map(i => (
           <tr key={i.id}><td><Link href={`/admin/items/${i.id}`} className="hover:underline">{i.title || i.url}</Link><div className="muted text-xs">{i.source}</div></td>
-          <td>{i.kind}</td><td>{(i.tags || []).slice(0, 5).map((t: string) => <span key={t} className="tag">{t}</span>)}</td><td>{i.status}</td><td className="muted whitespace-nowrap">{fmtDate(i.created_at)}</td></tr>
+          <td>{i.kind}</td><td>{(i.tags || []).slice(0, 5).map(t => <span key={t} className="tag">{t}</span>)}</td><td>{i.status}</td><td className="muted whitespace-nowrap">{fmtDate(i.created_at)}</td></tr>
         ))}
       </tbody></table>
     </Shell>

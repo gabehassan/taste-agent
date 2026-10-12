@@ -1,8 +1,9 @@
 import Nav from "@/components/nav";
+import type { Me } from "@/lib/types";
 import { userApi } from "@/lib/user";
 
 export async function me() {
-  return userApi("/v1/me");
+  return userApi<Me>("/v1/me");
 }
 
 export default async function UserShell({ children, name }: { children: React.ReactNode; name: string }) {

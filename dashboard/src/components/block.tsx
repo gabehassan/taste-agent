@@ -1,6 +1,7 @@
 "use client";
 import Link from "next/link";
 import { motion } from "motion/react";
+import type { Item } from "@/lib/types";
 
 export const clean = (s: string) => (s || "").trim().replace(/^[“”"'‘’]+|[“”"'‘’]+$/g, "").trim();
 export const host = (u?: string | null) => { try { return u ? new URL(u).hostname.replace(/^www\./, "") : ""; } catch { return ""; } };
@@ -8,7 +9,7 @@ export const favicon = (u?: string | null, size = 64) => { const h = host(u); re
 
 const IMAGE_KINDS = new Set(["screenshot", "tiktok", "video", "youtube", "instagram", "film", "book"]);
 
-export default function Block({ it, rel, index = 0 }: { it: any; rel: string; index?: number }) {
+export default function Block({ it, rel, index = 0 }: { it: Item; rel: string; index?: number }) {
   const thumb = it.meta?.thumbnail || it.media_urls?.[0];
   const avatar = it.meta?.author_avatar;
   const quote = clean(it.snippets?.[0] || "");
@@ -18,8 +19,7 @@ export default function Block({ it, rel, index = 0 }: { it: any; rel: string; in
   return (
     <motion.div variants={{ hidden: { opacity: 0 }, show: { opacity: 1, transition: { duration: 0.35, delay: (index % 16) * 0.02 } } }} className="group">
       <Link href={`/items/${it.id}`} className="block">
-        <div className="aspect-square relative overflow-hidden transition-colors duration-200" style={{ background: isImage ? "var(--paper-2)" : "var(--card)", border: "1px solid var(--line)", opacity: it.status === "archived" ? 0.45 : 1 }}
-          onMouseEnter={undefined}>
+        <div className="aspect-square relative overflow-hidden transition-colors duration-200" style={{ background: isImage ? "var(--paper-2)" : "var(--card)", border: "1px solid var(--line)", opacity: it.status === "archived" ? 0.45 : 1 }}>
           {isImage && <img src={thumb} alt="" className="absolute inset-0 w-full h-full object-cover" loading="lazy" />}
           {!isImage && (
             <div className="absolute inset-0 p-4 flex flex-col">

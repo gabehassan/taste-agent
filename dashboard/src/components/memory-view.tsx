@@ -1,6 +1,7 @@
 "use client";
 import { useState } from "react";
 import { motion, AnimatePresence } from "motion/react";
+import type { MemorySnapshot } from "@/lib/types";
 
 const rel = (s: string) => { const d = (Date.now() - new Date(s).getTime()) / 1000; return d < 60 ? "now" : d < 3600 ? `${Math.floor(d / 60)}m` : d < 86400 ? `${Math.floor(d / 3600)}h` : `${Math.floor(d / 86400)}d`; };
 const pct = (x: number | undefined) => Math.round((x ?? 0) * 100);
@@ -50,11 +51,11 @@ function Prompt({ name, about, text }: { name: string; about: string; text: stri
   );
 }
 
-export default function MemoryView({ m, admin = false }: { m: any; admin?: boolean }) {
+export default function MemoryView({ m, admin = false }: { m: MemorySnapshot; admin?: boolean }) {
   const v = m.voice.stats || {};
   const name = (m.user.name || "them").split(" ")[0];
   const you = admin ? name : "you";
-  const outs = m.recent_texts.filter((t: any) => t.direction === "out" && t.text);
+  const outs = m.recent_texts.filter(t => t.direction === "out" && t.text);
   const slots = m.schedule.plan?.slots || [];
   return (
     <div className="grid lg:grid-cols-[minmax(0,1fr)_360px] gap-x-20 gap-y-14">
@@ -77,10 +78,10 @@ export default function MemoryView({ m, admin = false }: { m: any; admin?: boole
         <section>
           <div className="flex items-baseline justify-between mb-6"><div className="mono u-faint">short-term memory</div><div className="mono u-faint">last 12 turns · 12 hours</div></div>
           {m.chat_memory.length === 0 ? (
-            <p className="u-muted text-sm">no conversation in memory. links and commands don't count; only back-and-forth does.</p>
+            <p className="u-muted text-sm">no conversation in memory. links and commands don&apos;t count; only back-and-forth does.</p>
           ) : (
             <div className="flex flex-col gap-1.5 max-w-xl">
-              {m.chat_memory.map((t: any, i: number) => (
+              {m.chat_memory.map((t, i) => (
                 <motion.div key={i} initial={{ opacity: 0, y: 6 }} animate={{ opacity: 1, y: 0 }} transition={{ duration: 0.3, delay: i * 0.03, ease }}><Bubble role={t.role} text={t.content} /></motion.div>
               ))}
             </div>
@@ -115,21 +116,21 @@ export default function MemoryView({ m, admin = false }: { m: any; admin?: boole
           <div className="mono u-faint mb-3">what {you} keep{admin ? "s" : ""} reaching for</div>
           <div className="flex flex-wrap gap-x-4 gap-y-1 text-sm">
             {m.tags.length === 0 && <span className="u-muted">nothing yet</span>}
-            {m.tags.map((t: any) => <span key={t.tag}>{t.tag}<span className="mono u-faint ml-1">{t.n}</span></span>)}
+            {m.tags.map(t => <span key={t.tag}>{t.tag}<span className="mono u-faint ml-1">{t.n}</span></span>)}
           </div>
         </section>
 
         {m.reactions.length > 0 && (
           <section>
             <div className="mono u-faint mb-3">reactions it noticed</div>
-            <div className="flex flex-col gap-1 text-sm">{m.reactions.map((r: any) => <div key={r.item_id} className="truncate"><span className="u-faint mr-2">{r.reactions.join(" ")}</span>{r.title}</div>)}</div>
+            <div className="flex flex-col gap-1 text-sm">{m.reactions.map(r => <div key={r.item_id} className="truncate"><span className="u-faint mr-2">{r.reactions.join(" ")}</span>{r.title}</div>)}</div>
           </section>
         )}
 
         <section>
           <div className="mono u-faint mb-3">today</div>
           <div className="text-sm">
-            {slots.length === 0 ? <span className="u-muted">no drops planned</span> : slots.map((s: any) => <span key={s.at} className="mr-3" style={{ opacity: s.done ? 0.4 : 1 }}>{s.at.slice(11, 16)}{s.done ? " ✓" : ""}</span>)}
+            {slots.length === 0 ? <span className="u-muted">no drops planned</span> : slots.map(s => <span key={s.at} className="mr-3" style={{ opacity: s.done ? 0.4 : 1 }}>{s.at.slice(11, 16)}{s.done ? " ✓" : ""}</span>)}
           </div>
           <div className="mono u-faint mt-2">{m.schedule.settings?.paused ? "paused" : `${m.schedule.settings?.surfaces_per_day ?? 3} a day, ${m.schedule.settings?.wake_start ?? 10}:00 to ${m.schedule.settings?.wake_end ?? 22}:00`} · ${Number(m.spend.today).toFixed(2)} today · ${Number(m.spend.month).toFixed(2)} this month</div>
         </section>
@@ -137,7 +138,7 @@ export default function MemoryView({ m, admin = false }: { m: any; admin?: boole
         <section>
           <div className="mono u-faint mb-3">sent</div>
           <div className="flex flex-col">
-            {outs.slice(0, 8).map((t: any) => (
+            {outs.slice(0, 8).map(t => (
               <div key={t.id} className="hair py-3">
                 <div className="text-sm leading-snug line-clamp-3">{t.text}</div>
                 <div className="mono u-faint mt-1">{t.status} · {rel(t.created_at)} ago</div>

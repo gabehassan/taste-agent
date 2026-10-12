@@ -1,10 +1,11 @@
 import Shell from "@/app/admin/shell";
 import { api, fmtMoney } from "@/lib/api";
 import { requireSession } from "@/lib/session";
+import type { Overview as OverviewData } from "@/lib/types";
 
 export default async function Overview() {
   await requireSession();
-  const o = await api("/v1/admin/overview");
+  const o = await api<OverviewData>("/v1/admin/overview");
   const cards = [
     ["users", o.users], ["items", o.items], ["spend today", `${fmtMoney(o.spend.today)} / ${fmtMoney(o.caps.global_daily)}`],
     ["spend this month", `${fmtMoney(o.spend.month)} / ${fmtMoney(o.caps.global_monthly)}`],

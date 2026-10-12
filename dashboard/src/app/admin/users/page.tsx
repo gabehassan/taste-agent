@@ -3,16 +3,17 @@ import KeyForm from "./key-form";
 import Shell from "@/app/admin/shell";
 import { api, fmtDate, fmtMoney } from "@/lib/api";
 import { requireSession } from "@/lib/session";
+import type { AdminUser } from "@/lib/types";
 import { addHandle, createUser, revokeKey, setUserCap, toggleUser } from "@/app/admin/actions";
 
 export default async function Users() {
   await requireSession();
-  const { users } = await api("/v1/admin/users");
+  const { users } = await api<{ users: AdminUser[] }>("/v1/admin/users");
   return (
     <Shell title="users">
       <InviteForm />
       <div className="flex flex-col gap-4 mb-8">
-        {users.map((u: any) => (
+        {users.map(u => (
           <div key={u.id} className="card">
             <div className="flex items-baseline gap-3 flex-wrap">
               <div className="text-lg">{u.name || "(no name)"}</div><div className="muted text-sm">{u.email}</div>
@@ -23,12 +24,12 @@ export default async function Users() {
             <div className="grid md:grid-cols-3 gap-4 mt-4 text-sm">
               <div>
                 <div className="muted text-xs uppercase mb-1">handles</div>
-                {(u.handles || []).map((h: any) => <div key={h.id}>{h.address} <span className="muted text-xs">{(h.capabilities || []).join(",")} {h.last_seen_at && `· seen ${fmtDate(h.last_seen_at)}`}</span></div>)}
+                {(u.handles || []).map(h => <div key={h.id}>{h.address} <span className="muted text-xs">{(h.capabilities || []).join(",")} {h.last_seen_at && `· seen ${fmtDate(h.last_seen_at)}`}</span></div>)}
                 <form action={addHandle} className="flex gap-1 mt-2"><input type="hidden" name="uid" value={u.id} /><input name="address" placeholder="email or +1…" required /><button className="ghost">add</button></form>
               </div>
               <div>
                 <div className="muted text-xs uppercase mb-1">api keys</div>
-                {(u.keys || []).filter((k: any) => !k.revoked_at).map((k: any) => <div key={k.id} className="flex gap-2 items-center"><code>{k.prefix}…</code><span className="muted text-xs">{k.name} · {k.scopes.join(",")} {k.last_used_at && `· used ${fmtDate(k.last_used_at)}`}</span><form action={revokeKey}><input type="hidden" name="kid" value={k.id} /><button className="danger text-xs px-2 py-0.5">revoke</button></form></div>)}
+                {(u.keys || []).filter(k => !k.revoked_at).map(k => <div key={k.id} className="flex gap-2 items-center"><code>{k.prefix}…</code><span className="muted text-xs">{k.name} · {k.scopes.join(",")} {k.last_used_at && `· used ${fmtDate(k.last_used_at)}`}</span><form action={revokeKey}><input type="hidden" name="kid" value={k.id} /><button className="danger text-xs px-2 py-0.5">revoke</button></form></div>)}
                 <KeyForm uid={u.id} />
               </div>
               <div className="flex flex-col gap-2">

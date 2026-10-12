@@ -50,9 +50,9 @@ export async function addHandle(formData: FormData) {
 // where it would land in browser history and request logs.
 export async function createKeyAction(_previous: { key: string; error: string }, formData: FormData) {
   try {
-    const r = await api(`/v1/admin/users/${formData.get("uid")}/keys`, { method: "POST", body: JSON.stringify({ name: formData.get("name") || "key", scopes: [String(formData.get("scope") || "transport")] }) });
+    const r = await api<{ key: string }>(`/v1/admin/users/${formData.get("uid")}/keys`, { method: "POST", body: JSON.stringify({ name: formData.get("name") || "key", scopes: [String(formData.get("scope") || "transport")] }) });
     revalidatePath("/admin/users");
-    return { key: r.key as string, error: "" };
+    return { key: r.key, error: "" };
   } catch {
     return { key: "", error: "Couldn't create a key. Try again." };
   }
@@ -126,11 +126,11 @@ export async function retryJob(formData: FormData) {
 export async function createInviteAction(_previous: { token: string; error: string }, formData: FormData) {
   await requireSession();
   try {
-    const result = await api("/v1/admin/invites", { method: "POST", body: JSON.stringify({
+    const result = await api<{ token: string }>("/v1/admin/invites", { method: "POST", body: JSON.stringify({
       email: formData.get("email") || null, role: "user", days: 7,
     }) });
     revalidatePath("/admin/users");
-    return { token: result.token as string, error: "" };
+    return { token: result.token, error: "" };
   } catch {
     return { token: "", error: "Couldn't create an invite. Try again." };
   }

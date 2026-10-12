@@ -1,13 +1,18 @@
 import Link from "next/link";
 import { api } from "@/lib/api";
 import { currentUserId } from "@/lib/session";
+import type { AdminUser } from "@/lib/types";
 import { pickUser } from "@/app/admin/actions";
 
 const NAV = [["/admin", "overview"], ["/admin/items", "items"], ["/admin/profile", "profile"], ["/admin/memory", "memory"], ["/admin/connections", "connections"], ["/admin/users", "users"], ["/admin/settings", "settings"], ["/admin/logs", "logs"]];
 
+async function adminUsers() {
+  const [{ users }, uid] = await Promise.all([api<{ users: AdminUser[] }>("/v1/admin/users"), currentUserId()]);
+  return { users, current: users.find(u => u.id === uid) ?? users[0] ?? null };
+}
+
 export default async function Shell({ children, title }: { children: React.ReactNode; title: string }) {
-  const [{ users }, uid] = await Promise.all([api("/v1/admin/users"), currentUserId()]);
-  const current = users.find((u: any) => u.id === uid) ?? users[0];
+  const { users, current } = await adminUsers();
   return (
     <div className="flex min-h-screen">
       <aside className="w-52 shrink-0 border-r border-neutral-800 p-4 flex flex-col gap-1">
@@ -18,7 +23,7 @@ export default async function Shell({ children, title }: { children: React.React
         <form action={pickUser} className="mt-auto flex flex-col gap-2">
           <label className="text-xs muted">acting as</label>
           <select name="uid" defaultValue={current?.id} className="w-full">
-            {users.map((u: any) => <option key={u.id} value={u.id}>{u.name || u.email || u.id.slice(0, 8)}</option>)}
+            {users.map(u => <option key={u.id} value={u.id}>{u.name || u.email || u.id.slice(0, 8)}</option>)}
           </select>
           <button className="ghost">switch</button>
         </form>
@@ -33,6 +38,5 @@ export default async function Shell({ children, title }: { children: React.React
 }
 
 export async function actingUser() {
-  const [{ users }, uid] = await Promise.all([api("/v1/admin/users"), currentUserId()]);
-  return users.find((u: any) => u.id === uid) ?? users[0] ?? null;
+  return (await adminUsers()).current;
 }

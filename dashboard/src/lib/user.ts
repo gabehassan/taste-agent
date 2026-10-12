@@ -44,7 +44,7 @@ export async function clearUserKey() {
   jar.delete(COOKIE);
 }
 
-export async function userApi<T = any>(path: string, init: RequestInit = {}, key?: string | null): Promise<T> {
+export async function userApi<T = unknown>(path: string, init: RequestInit = {}, key?: string | null): Promise<T> {
   const k = key ?? (await userKey());
   if (!k) redirect("/login");
   const res = await fetch(new URL(path, BASE), {
@@ -61,7 +61,7 @@ export async function userApi<T = any>(path: string, init: RequestInit = {}, key
   return res.json();
 }
 
-export async function publicApi<T = any>(path: string, body: unknown): Promise<T> {
+export async function publicApi<T = unknown>(path: string, body: unknown): Promise<T> {
   const res = await fetch(new URL(path, BASE), { method: "POST", headers: { "Content-Type": "application/json", ...(await forwardedFor()) }, body: JSON.stringify(body), cache: "no-store" });
   if (!res.ok) {
     let msg = res.statusText;

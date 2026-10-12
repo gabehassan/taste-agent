@@ -1,6 +1,7 @@
 import Shell from "@/app/admin/shell";
 import { api } from "@/lib/api";
 import { requireSession } from "@/lib/session";
+import type { Settings as SettingsData } from "@/lib/types";
 import { saveSettings } from "@/app/admin/actions";
 
 const GROUPS: Record<string, string[]> = {
@@ -12,14 +13,14 @@ const GROUPS: Record<string, string[]> = {
 export default async function Settings({ searchParams }: { searchParams: Promise<{ e?: string }> }) {
   await requireSession();
   const { e } = await searchParams;
-  const { settings } = await api("/v1/admin/settings");
+  const { settings } = await api<{ settings: SettingsData }>("/v1/admin/settings");
   return (
     <Shell title="settings">
       {e === "json" && <div className="text-red-400 mb-3">model_prices was not valid JSON</div>}
       <form action={saveSettings} className="flex flex-col gap-6">
         {Object.entries(GROUPS).map(([g, keys]) => (
           <div key={g} className="card"><div className="font-medium mb-3">{g}</div>
-            <div className="grid md:grid-cols-4 gap-3">{keys.map(k => <label key={k} className="text-xs muted flex flex-col gap-1">{k}<input name={k} type="number" step="any" defaultValue={settings[k]} /></label>)}</div>
+            <div className="grid md:grid-cols-4 gap-3">{keys.map(k => <label key={k} className="text-xs muted flex flex-col gap-1">{k}<input name={k} type="number" step="any" defaultValue={String(settings[k] ?? "")} /></label>)}</div>
           </div>
         ))}
         <div className="card"><div className="font-medium mb-1">model prices</div><div className="muted text-xs mb-2">USD per 1M tokens (in / out / cached_in) or per_minute for audio. Used to compute spend against the caps.</div>
