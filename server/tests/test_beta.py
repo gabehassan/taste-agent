@@ -1,6 +1,7 @@
 """Regression tests. TEST_DATABASE_URL creates and removes an isolated test schema.
 No model calls or real messages are made. Without it, only pure tests run.
 """
+import base64
 import concurrent.futures
 import hashlib
 import datetime as dt
@@ -231,6 +232,26 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(client.post("/v1/inbound", content=too_big).status_code, 413)
         self.assertEqual(client.post("/v1/inbound", content=iter([too_big[:4_000_000], too_big[4_000_000:]])).status_code, 413)
         self.assertEqual(client.post("/v1/inbound", content=b"{}", headers={"Content-Length": "abc"}).status_code, 413)
+
+    def transport_key(self, u):
+        from tasteserver import auth
+        raw, _ = auth.create_key(u["id"], "relay", ["transport"])
+        return {"Authorization": f"Bearer {raw}"}
+
+    def test_relay_attachments_are_typed_and_validated(self):
+        u = self.user()
+        client = TestClient(api.app)
+        headers = self.transport_key(u)
+        bad = client.post("/v1/inbound", headers=headers, json={"handle": PHONE, "attachments": [
+            {"content_type": "image/png", "data_b64": "not base64!!"}]})
+        self.assertEqual(bad.status_code, 400)
+        svg = base64.b64encode(b"<svg onload=alert(1)>").decode()
+        png = base64.b64encode(b"\x89PNG fake").decode()
+        with patch.object(api.storage, "put") as put:
+            ok = client.post("/v1/inbound", headers=headers, json={"handle": PHONE, "attachments": [
+                {"content_type": "image/svg+xml", "data_b64": svg}, {"content_type": "image/png", "data_b64": png}]})
+        self.assertEqual(ok.status_code, 200)
+        self.assertEqual([c.args[2] for c in put.call_args_list], ["image/png"])
 
     def test_first_link_and_duplicate_webhook(self):
         db.set_setting("open_signup", True)

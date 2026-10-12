@@ -1,5 +1,6 @@
 """HTTP API with scoped bearer auth, public login and signed messaging webhooks."""
 import base64
+import binascii
 import hashlib
 import logging
 import os
@@ -108,6 +109,11 @@ def _key_rate(p: Principal):
     ratelimit.hit(f"key:{p.key_id}", int(db.setting("rate_key_per_hour")), 3600)
 
 
+# Raster formats the vision model accepts. SVG and other image/* types are refused: they can carry script
+# and would be served back from the bucket with their original content type.
+IMAGE_TYPES = {"image/jpeg": "jpg", "image/png": "png", "image/gif": "gif", "image/webp": "webp", "image/heic": "heic"}
+
+
 def _clean(row):
     if row is None:
         return None
@@ -160,15 +166,18 @@ def inbound(body: Inbound, p: Principal = Depends(require("transport"))):
     stored = []
     msg_key = uuid.uuid4().hex[:12]
     for i, a in enumerate(body.attachments):
-        if not a.content_type.startswith("image/"):
+        ct = a.content_type.split(";")[0].strip().lower()
+        if ct not in IMAGE_TYPES:
             continue
-        data = base64.b64decode(a.data_b64)
+        try:
+            data = base64.b64decode(a.data_b64, validate=True)
+        except binascii.Error:
+            raise HTTPException(400, "attachment is not valid base64") from None
         if len(data) > MAX_ATTACHMENT_BYTES:
             raise HTTPException(413, "attachment too large")
-        ext = {"image/jpeg": "jpg", "image/png": "png", "image/gif": "gif", "image/webp": "webp"}.get(a.content_type, "bin")
-        key = f"users/{uid}/in/{msg_key}/{i}.{ext}"
-        storage.put(key, data, a.content_type)
-        stored.append({"key": key, "content_type": a.content_type, "bytes": len(data), "name": a.name[:80]})
+        key = f"users/{uid}/in/{msg_key}/{i}.{IMAGE_TYPES[ct]}"
+        storage.put(key, data, ct)
+        stored.append({"key": key, "content_type": ct, "bytes": len(data), "name": a.name[:80]})
     meta = {}
     if body.kind == "reaction":
         meta = {"reaction": body.reaction, "target_external_id": body.target_external_id}
@@ -559,11 +568,10 @@ def _store_remote_attachments(uid, atts):
     for i, a in enumerate(atts[:MAX_ATTACHMENTS]):
         try:
             r = netguard.get(a["url"], max_bytes=MAX_ATTACHMENT_BYTES, timeout=20)
-            ct = (a.get("content_type") or r.headers.get("content-type", "")).split(";")[0].strip()
-            if not ct.startswith("image/"):
+            ct = (a.get("content_type") or r.headers.get("content-type", "")).split(";")[0].strip().lower()
+            if ct not in IMAGE_TYPES:
                 continue
-            ext = {"image/jpeg": "jpg", "image/png": "png", "image/gif": "gif", "image/webp": "webp", "image/heic": "heic"}.get(ct, "bin")
-            key = f"users/{uid}/in/{msg_key}/{i}.{ext}"
+            key = f"users/{uid}/in/{msg_key}/{i}.{IMAGE_TYPES[ct]}"
             storage.put(key, r.content, ct)
             stored.append({"key": key, "content_type": ct, "bytes": len(r.content), "name": a.get("name", "file")[:80]})
         except Exception as e:
