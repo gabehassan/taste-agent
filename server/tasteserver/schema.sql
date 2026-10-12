@@ -246,3 +246,10 @@ CREATE TABLE IF NOT EXISTS webhook_events (
   id TEXT PRIMARY KEY,
   received_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
+
+-- Upgrades for databases created before these columns existed. New databases get them from the tables above.
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS send_attempts INT NOT NULL DEFAULT 0;
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS send_after TIMESTAMPTZ NOT NULL DEFAULT now();
+ALTER TABLE messages ADD COLUMN IF NOT EXISTS send_locked_at TIMESTAMPTZ;
+ALTER TABLE users ALTER COLUMN transport SET DEFAULT 'relay';
+UPDATE users SET transport = 'relay' WHERE transport = 'mac';
