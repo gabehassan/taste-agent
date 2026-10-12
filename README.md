@@ -2,68 +2,151 @@
 
 An iMessage agent that learns what you like from what you send it.
 
-Text yourself (the "message to self" thread on iMessage) a link, a screenshot, a book title, or a stray thought. The agent reads it, files it, replies with the one interesting hook, and keeps a living profile of your taste. A few times a day it texts you a snippet from something you saved, or an observation about what you keep reaching for.
+Text it a link, a screenshot, a book title or a stray thought. It reads the thing properly, keeps it, and replies with
+the one part worth knowing. Over time it builds a profile of your taste from what you actually save, finish and react
+to. A few times a day it may text you an excerpt from something you saved and forgot about, but only when it has a
+concrete reason to. Staying quiet is the default.
 
-Everything runs on this Mac. Messages are read from `~/Library/Messages/chat.db` and sent through Messages.app with AppleScript. Nothing goes to a third-party iMessage provider. Content and the taste profile go to OpenAI (gpt-5.6-luna).
-
-## What it understands
+## What it reads
 
 | You send | It does |
 |---|---|
-| article / essay / blog link | full text via trafilatura, summary, 2 to 5 verbatim snippets, tags |
-| x.com / twitter link | tweet text, quoted tweet, image alt text (via fxtwitter) |
-| reddit link | post + top comments, and the linked page if it is a link post (Reddit OAuth) |
-| tiktok / youtube / instagram | title, caption, transcript when captions exist (yt-dlp) |
-| goodreads / amazon book link, or just a title | Open Library lookup: author, year, blurb |
-| screenshot | Claude reads the image |
-| anything else | free-form chat with tools over your saved items |
+| an article or essay | extracts the full text with trafilatura |
+| an X post | text, quoted post and image alt text, via fxtwitter |
+| a Reddit thread | the post, the linked page and the top comments, via the Reddit API |
+| a TikTok, YouTube or Instagram link | captions when they exist, otherwise transcribes the audio and looks at three frames |
+| a Goodreads or Amazon book link, or just a title | author, year and description from Open Library |
+| a screenshot | reads the image |
+| anything else | a conversation, with tools to search, read and update your saves |
 
-Words it treats as commands: `taste` (send the profile), `hit me` (surface something now), `more` (another snippet from the same item), `read` (mark the last one read), `status`, `pause`, `resume`, `help`.
+You can also connect Letterboxd, Goodreads, Substack and RSS feeds. Ratings from those count as stronger evidence than
+saves.
 
-## Layout
+Words it treats as commands: `taste` (your profile), `hit me` (something from your saves now), `more`, `read`,
+`later`, `skip`, `status`, `pause`, `resume`, `login` and `help`.
+
+## How it works
 
 ```
-src/taste/
-  imessage.py   read chat.db, send via AppleScript (the only iMessage-specific file)
-  fetch.py      URL -> text for each source type
-  brain.py      Claude calls: digest, taste profile, chat with tools
-  scheduler.py  when to surface, what to pick
-  daemon.py     poll loop, commands, replies
-  cli.py        `taste` command
-data/           sqlite db + log (gitignored)
-.env            ANTHROPIC_API_KEY, REDDIT_CLIENT_ID/SECRET (gitignored)
+iMessage ── Blooio webhook ──┐
+                             ├── api ── Postgres (state, job queue, rate limits)
+relay client ── /v1/inbound ─┘               │
+                                   worker: fetch, transcribe, digest, profile, schedule, send
+dashboard (Next.js) ── api
 ```
 
-## Commands
+A FastAPI process takes messages in, and a worker process does everything slow: fetching, transcription, model calls
+and sending. They share one Postgres database, which is also the job queue. Every model call is priced and checked
+against per-user and global spend caps. The dashboard is a Next.js app for browsing your saves, with an admin area for
+users, keys and settings. Every prompt and canned reply lives in [`server/prompts.toml`](server/prompts.toml).
+
+More detail, including the auth model and limits: [docs/architecture.md](docs/architecture.md).
+
+## Running it locally
+
+You need Python 3.13 with [uv](https://docs.astral.sh/uv/), Node 22, Postgres 13 or newer, ffmpeg (for video), and an
+OpenAI API key.
 
 ```bash
-.venv/bin/taste run            # foreground daemon
-.venv/bin/taste ingest URL     # save something without iMessage
-.venv/bin/taste surface --dry  # print what it would send next
-.venv/bin/taste profile --refresh
-.venv/bin/taste chat "what should i read tonight"
-.venv/bin/taste status
-.venv/bin/taste items
-.venv/bin/taste install        # launchd agent (com.gabe.taste-agent), starts at login
-.venv/bin/taste uninstall
-.venv/bin/taste logs
+cd server
+cp .env.example .env    # set DATABASE_URL, OPENAI_API_KEY and ADMIN_BOOTSTRAP_KEY
+uv sync
+uv run --env-file .env uvicorn tasteserver.api:app --port 8080
 ```
 
-## Config
+In a second terminal, start the worker:
 
-Environment variables (put them in `.env`):
+```bash
+uv run --env-file .env python -m tasteserver.worker
+```
 
-- `TASTE_SELF_HANDLES` comma-separated handles that count as you (default `you@example.com`)
-- `TASTE_MODEL` default `gpt-5.6-luna` (OpenAI Responses API; `OPENAI_API_KEY` in `.env`)
-- `TASTE_SURFACES_PER_DAY` default 3, between `TASTE_WAKE_START` (10) and `TASTE_WAKE_END` (22) local time
-- `TASTE_MIN_GAP_MINUTES` default 90
+The first boot creates the schema and an admin key from `ADMIN_BOOTSTRAP_KEY`. Use it to create yourself:
 
-## Permissions
+```bash
+export ADMIN=tk_...    # your ADMIN_BOOTSTRAP_KEY
+curl -s localhost:8080/v1/admin/users -H "Authorization: Bearer $ADMIN" -H "Content-Type: application/json" \
+  -d '{"name": "you", "handles": ["+12025550143"]}'
+```
 
-The process that runs the daemon needs Full Disk Access (to read `chat.db`) and Automation access to Messages (to send). Under launchd that process is the Python binary in `.venv`, which resolves to the uv-managed CPython at `~/.local/share/uv/python/...`. If the log shows `unable to open database` or `Not authorized to send Apple events`, add that binary in System Settings > Privacy & Security > Full Disk Access and > Automation.
+You don't need a phone to try it. Give the new user a transport key and talk to it over the relay API:
 
-## Notes
+```bash
+curl -s localhost:8080/v1/admin/users/<user id>/keys -H "Authorization: Bearer $ADMIN" \
+  -H "Content-Type: application/json" -d '{"name": "terminal", "scopes": ["transport"]}'
+export KEY=tk_...      # the key from that response
+curl -s localhost:8080/v1/inbound -H "Authorization: Bearer $KEY" -H "Content-Type: application/json" \
+  -d '{"handle": "+12025550143", "text": "https://www.paulgraham.com/greatwork.html"}'
+curl -s localhost:8080/v1/outbound -H "Authorization: Bearer $KEY"
+```
 
-- The agent's own replies land in the same self-chat. They are recognised by matching against the last 48h of sent texts and skipped.
-- Links that fail to digest (no API credits, site down) are stored as `pending` and retried every 10 minutes.
-- A hard cap of 20 sends per hour protects against runaway loops.
+Then the dashboard:
+
+```bash
+cd dashboard
+cp .env.example .env.local    # TASTE_API_URL, TASTE_ADMIN_KEY (the same admin key) and a password
+npm install
+npm run dev
+```
+
+The admin area is at `localhost:3000/admin`. Users log in with a code texted to them. Without a messaging provider,
+print one instead and use "I already have a code" on the login page:
+
+```bash
+uv run --env-file .env python -m tasteserver.login +12025550143
+```
+
+## Messaging
+
+**Blooio** gives the agent its own iMessage number, with tapbacks, typing bubbles and read receipts. Set the `BLOOIO_*`
+variables and point a webhook at `https://<api>/v1/webhooks/blooio`. People who text the number need an invite code
+from `/admin/users`, unless you turn on `open_signup`.
+
+**The relay API** is for anything else that can send and receive messages, such as a Mac reading its own Messages
+database or another provider. A relay authenticates with a transport-scoped key and can only speak for its user's
+registered handles.
+
+| Endpoint | Purpose |
+|---|---|
+| `POST /v1/transport/hello` | declare what the relay supports (`react`, `typing`, `effects`) |
+| `POST /v1/inbound` | deliver a message: handle, text, optional base64 images, an external id for dedupe |
+| `GET /v1/outbound` | poll for queued replies |
+| `POST /v1/outbound/{id}/ack` | report a reply as sent or failed |
+
+## Deploying
+
+The setup this was built on: Railway for the API, worker, Postgres and a bucket, and Vercel for the dashboard.
+
+1. Create a Railway project with Postgres and a bucket. Add two services from `server/`, named `api` and `worker`.
+   They build the same Dockerfile; `start.sh` runs the worker when the service is named `worker` or `TASTE_ROLE=worker`.
+2. Give both services the variables from [`server/.env.example`](server/.env.example).
+3. Deploy `dashboard/` to Vercel with the variables from [`dashboard/.env.example`](dashboard/.env.example). Set the
+   API's `DASHBOARD_URL` and `DASHBOARD_ORIGIN` to the dashboard's address, and give both sides the same
+   `DASHBOARD_PROXY_SECRET`.
+4. Point the Blooio webhook at the API.
+
+Spend caps default to $2 per user per day and $10 per day overall. Change them and the model prices they are computed
+from in `/admin/settings`. If your model isn't in `model_prices`, its calls count as free.
+
+## Development
+
+```bash
+cd server
+uv run ruff check . && uv run ruff format --check .
+TEST_DATABASE_URL=postgresql://postgres@localhost:5432/postgres uv run pytest
+```
+
+Tests that need Postgres create and drop their own schema, and are skipped when `TEST_DATABASE_URL` isn't set. No test
+calls a model or sends a message.
+
+```bash
+cd dashboard
+npm run lint && npm run typecheck && npm run build
+```
+
+## Security
+
+See [SECURITY.md](SECURITY.md) for how to report a vulnerability.
+
+## License
+
+[MIT](LICENSE)
