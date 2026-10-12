@@ -253,6 +253,26 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(ok.status_code, 200)
         self.assertEqual([c.args[2] for c in put.call_args_list], ["image/png"])
 
+    def test_transport_keys_cannot_read_user_data(self):
+        u = self.user()
+        client = TestClient(api.app)
+        headers = self.transport_key(u)
+        for path in ["/v1/me", "/v1/items", "/v1/profile", "/v1/messages", "/v1/me/memory"]:
+            self.assertEqual(client.get(path, headers=headers).status_code, 403, path)
+        self.assertEqual(client.get("/v1/outbound", headers={"Authorization": headers["Authorization"].replace("Bearer", "bearer")}).status_code, 200)
+
+    def test_list_bounds_and_admin_validation(self):
+        from tasteserver import auth
+        u = self.user()
+        raw, _ = auth.create_key(None, "admin", ["admin"])
+        client = TestClient(api.app)
+        admin = {"Authorization": f"Bearer {raw}"}
+        self.assertEqual(client.get(f"/v1/items?limit=-1&user_id={u['id']}", headers=admin).status_code, 422)
+        self.assertEqual(client.get(f"/v1/items?offset=-5&user_id={u['id']}", headers=admin).status_code, 422)
+        self.assertEqual(client.patch(f"/v1/admin/users/{u['id']}", headers=admin, json={"role": "root"}).status_code, 400)
+        self.assertEqual(client.patch(f"/v1/admin/users/{u['id']}", headers=admin, json={"tz": "Mars/Base"}).status_code, 400)
+        self.assertEqual(client.patch(f"/v1/admin/users/{u['id']}", headers=admin, json={"status": "disabled"}).status_code, 200)
+
     def test_first_link_and_duplicate_webhook(self):
         db.set_setting("open_signup", True)
         ev = event("https://example.com/article")

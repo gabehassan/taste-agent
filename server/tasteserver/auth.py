@@ -51,8 +51,8 @@ class Principal:
 
 
 def principal(request: Request) -> Principal:
-    auth = request.headers.get("authorization", "")
-    raw = auth.removeprefix("Bearer ").strip() if auth.lower().startswith("bearer ") else ""
+    scheme, _, raw = request.headers.get("authorization", "").partition(" ")
+    raw = raw.strip() if scheme.lower() == "bearer" else ""
     k = lookup(raw)
     if not k:
         raise HTTPException(401, "invalid or missing api key")

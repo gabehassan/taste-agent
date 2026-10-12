@@ -8,8 +8,9 @@ import secrets
 import uuid
 from contextlib import asynccontextmanager
 from typing import Optional
+from zoneinfo import ZoneInfo, ZoneInfoNotFoundError
 
-from fastapi import Depends, FastAPI, HTTPException, Request
+from fastapi import Depends, FastAPI, HTTPException, Query, Request
 from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
@@ -234,7 +235,7 @@ def ack(mid: int, body: Ack, request: Request, p: Principal = Depends(require("t
 # =============================================================================
 
 @app.get("/v1/me")
-def me(request: Request, p: Principal = Depends(require("user", "transport"))):
+def me(request: Request, p: Principal = Depends(require("user"))):
     u = target_user(request, p)
     from .scheduler import todays_plan
     uid = u["id"]
@@ -267,11 +268,7 @@ def patch_me(body: MeSettings, request: Request, p: Principal = Depends(require(
     if body.name is not None:
         db.q("UPDATE users SET name = %s WHERE id = %s", (body.name[:80], u["id"]))
     if body.tz is not None:
-        from zoneinfo import ZoneInfo
-        try:
-            ZoneInfo(body.tz)
-        except Exception:
-            raise HTTPException(400, "bad tz")
+        _check_tz(body.tz)
         db.q("UPDATE users SET tz = %s WHERE id = %s", (body.tz, u["id"]))
     patch = {}
     if body.surfaces_per_day is not None:
@@ -287,8 +284,15 @@ def patch_me(body: MeSettings, request: Request, p: Principal = Depends(require(
     return _clean(db.get_user(u["id"]))
 
 
+def _check_tz(tz):
+    try:
+        ZoneInfo(tz)
+    except (ValueError, ZoneInfoNotFoundError):
+        raise HTTPException(400, "unknown time zone") from None
+
+
 @app.get("/v1/items")
-def items(request: Request, limit: int = 50, offset: int = 0, status: Optional[str] = None, kind: Optional[str] = None,
+def items(request: Request, limit: int = Query(50, ge=1, le=200), offset: int = Query(0, ge=0), status: Optional[str] = None, kind: Optional[str] = None,
           q: Optional[str] = None, p: Principal = Depends(require("user"))):
     u = target_user(request, p)
     limit = min(limit, 200)
@@ -309,8 +313,8 @@ def item(item_id: int, request: Request, p: Principal = Depends(require("user"))
 
 class ItemPatch(BaseModel):
     status: Optional[str] = None
-    note: Optional[str] = None
-    tags: Optional[list[str]] = None
+    note: Optional[str] = Field(None, max_length=2000)
+    tags: Optional[list[str]] = Field(None, max_length=20)
 
 
 @app.patch("/v1/items/{item_id}")
@@ -345,8 +349,8 @@ def delete_item(item_id: int, request: Request, p: Principal = Depends(require("
 
 
 class IngestBody(BaseModel):
-    url: str
-    note: str = ""
+    url: str = Field(max_length=2048)
+    note: str = Field("", max_length=2000)
     notify: bool = False
 
 
@@ -384,13 +388,13 @@ def surface_now(request: Request, kind: Optional[str] = None, p: Principal = Dep
 
 
 @app.get("/v1/surfaces")
-def surfaces(request: Request, limit: int = 50, p: Principal = Depends(require("user"))):
+def surfaces(request: Request, limit: int = Query(50, ge=1, le=200), p: Principal = Depends(require("user"))):
     u = target_user(request, p)
     return {"surfaces": db.q("SELECT * FROM surfaces WHERE user_id = %s ORDER BY id DESC LIMIT %s", (u["id"], min(limit, 200)))}
 
 
 @app.get("/v1/messages")
-def messages(request: Request, limit: int = 50, p: Principal = Depends(require("user"))):
+def messages(request: Request, limit: int = Query(50, ge=1, le=200), p: Principal = Depends(require("user"))):
     u = target_user(request, p)
     return {"messages": db.q("SELECT id, direction, kind, text, status, attachments, meta, created_at, sent_at FROM messages WHERE user_id = %s ORDER BY id DESC LIMIT %s", (u["id"], min(limit, 200)))}
 
@@ -774,6 +778,7 @@ class UserBody(BaseModel):
 
 @app.post("/v1/admin/users")
 def create_user(body: UserBody, p: Principal = Depends(require("admin"))):
+    _check_tz(body.tz)
     r = db.q("INSERT INTO users(email, name, role, tz, settings) VALUES (%s, %s, %s, %s, %s) RETURNING *",
              (body.email, body.name, body.role if body.role in ("user", "admin") else "user", body.tz, db.J(body.settings)), one=True)
     for h in body.handles:
@@ -797,8 +802,11 @@ def patch_user(uid: str, body: UserPatch, p: Principal = Depends(require("admin"
     if not u:
         raise HTTPException(404)
     f = {k: v for k, v in body.model_dump().items() if v is not None}
-    if "transport" in f and f["transport"] not in ("mac", "blooio"):
-        raise HTTPException(400, "transport must be mac or blooio")
+    for field, allowed in (("transport", ("mac", "blooio")), ("role", ("user", "admin")), ("status", ("active", "disabled"))):
+        if field in f and f[field] not in allowed:
+            raise HTTPException(400, f"{field} must be one of: {', '.join(allowed)}")
+    if "tz" in f:
+        _check_tz(f["tz"])
     if "settings" in f:
         db.q("UPDATE users SET settings = settings || %s WHERE id = %s", (db.J(f.pop("settings")), uid))
     if f:
@@ -822,7 +830,9 @@ def add_handle(uid: str, body: HandleBody, p: Principal = Depends(require("admin
 
 @app.delete("/v1/admin/handles/{hid}")
 def delete_handle(hid: str, p: Principal = Depends(require("admin"))):
-    db.q("DELETE FROM handles WHERE id = %s", (hid,))
+    h = db.q("DELETE FROM handles WHERE id = %s RETURNING user_id, address", (hid,), one=True)
+    if h:
+        db.audit(p.key_id, h["user_id"], "handle.delete", {"address": h["address"]})
     return {"ok": True}
 
 
@@ -880,7 +890,7 @@ def admin_reset(uid: str, body: ResetBody, p: Principal = Depends(require("admin
 
 
 @app.get("/v1/admin/usage")
-def admin_usage(days: int = 30, p: Principal = Depends(require("admin"))):
+def admin_usage(days: int = Query(30, ge=1, le=365), p: Principal = Depends(require("admin"))):
     days = min(days, 365)
     return {
         "by_day": db.q("SELECT date_trunc('day', created_at) AS day, SUM(cost_usd) AS cost, COUNT(*) AS calls FROM usage WHERE created_at > now() - make_interval(days => %s) GROUP BY 1 ORDER BY 1", (days,)),
@@ -908,7 +918,7 @@ def put_settings(body: dict, p: Principal = Depends(require("admin"))):
 
 
 @app.get("/v1/admin/jobs")
-def admin_jobs(limit: int = 100, status: Optional[str] = None, p: Principal = Depends(require("admin"))):
+def admin_jobs(limit: int = Query(100, ge=1, le=500), status: Optional[str] = None, p: Principal = Depends(require("admin"))):
     if status:
         return {"jobs": db.q("SELECT * FROM jobs WHERE status = %s ORDER BY id DESC LIMIT %s", (status, min(limit, 500)))}
     return {"jobs": db.q("SELECT * FROM jobs ORDER BY id DESC LIMIT %s", (min(limit, 500),))}
@@ -921,19 +931,19 @@ def retry_job(jid: int, p: Principal = Depends(require("admin"))):
 
 
 @app.get("/v1/admin/audit")
-def admin_audit(limit: int = 100, p: Principal = Depends(require("admin"))):
+def admin_audit(limit: int = Query(100, ge=1, le=500), p: Principal = Depends(require("admin"))):
     return {"audit": db.q("SELECT * FROM audit_log ORDER BY id DESC LIMIT %s", (min(limit, 500),))}
 
 
 @app.get("/v1/admin/messages")
-def admin_messages(limit: int = 100, p: Principal = Depends(require("admin"))):
+def admin_messages(limit: int = Query(100, ge=1, le=500), p: Principal = Depends(require("admin"))):
     return {"messages": db.q("SELECT m.id, m.user_id, u.name, m.direction, m.kind, m.text, m.status, m.meta, m.created_at, m.sent_at FROM messages m LEFT JOIN users u ON u.id = m.user_id ORDER BY m.id DESC LIMIT %s", (min(limit, 500),))}
 
 
 class InviteBody(BaseModel):
     email: Optional[str] = None
     role: str = "user"
-    days: int = 7
+    days: int = Field(7, ge=1, le=30)
 
 
 @app.post("/v1/admin/invites")
