@@ -46,9 +46,16 @@ export async function addHandle(formData: FormData) {
   revalidatePath("/admin/users");
 }
 
-export async function createKey(formData: FormData): Promise<void> {
-  const r = await api(`/v1/admin/users/${formData.get("uid")}/keys`, { method: "POST", body: JSON.stringify({ name: formData.get("name") || "key", scopes: [String(formData.get("scope") || "transport")] }) });
-  redirect(`/admin/users?newkey=${encodeURIComponent(r.key)}`);
+// The raw key is returned to the form that asked for it and shown once. It never goes into a URL,
+// where it would land in browser history and request logs.
+export async function createKeyAction(_previous: { key: string; error: string }, formData: FormData) {
+  try {
+    const r = await api(`/v1/admin/users/${formData.get("uid")}/keys`, { method: "POST", body: JSON.stringify({ name: formData.get("name") || "key", scopes: [String(formData.get("scope") || "transport")] }) });
+    revalidatePath("/admin/users");
+    return { key: r.key as string, error: "" };
+  } catch {
+    return { key: "", error: "Couldn't create a key. Try again." };
+  }
 }
 
 export async function revokeKey(formData: FormData) {

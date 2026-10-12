@@ -1,7 +1,7 @@
 "use server";
 import { redirect } from "next/navigation";
 import { revalidatePath } from "next/cache";
-import { ApiError, publicApi, setUserKey, userApi } from "@/lib/user";
+import { ApiError, clearLoginPhone, publicApi, setLoginPhone, setUserKey, userApi } from "@/lib/user";
 
 export async function requestLink(formData: FormData) {
   const phone = String(formData.get("phone") || "").trim();
@@ -9,12 +9,13 @@ export async function requestLink(formData: FormData) {
     const e = err instanceof ApiError ? (err.status === 429 ? "slow" : err.status === 422 ? "phone" : "unavailable") : "unavailable";
     redirect(`/login?e=${e}`);
   }
-  redirect(`/login?sent=1&phone=${encodeURIComponent(phone)}`);
+  await setLoginPhone(phone);
+  redirect("/login?sent=1");
 }
 
 export async function enterExistingCode(formData: FormData) {
-  const phone = String(formData.get("phone") || "").trim();
-  redirect(`/login?sent=1&phone=${encodeURIComponent(phone)}`);
+  await setLoginPhone(String(formData.get("phone") || "").trim());
+  redirect("/login?sent=1");
 }
 
 export async function exchangeCode(formData: FormData) {
@@ -23,9 +24,10 @@ export async function exchangeCode(formData: FormData) {
   try {
     const r = await publicApi<{ key: string }>("/v1/auth/exchange", { token, phone });
     await setUserKey(r.key);
+    await clearLoginPhone();
   } catch (err) {
     const e = err instanceof ApiError && err.status === 429 ? "slow" : "code";
-    redirect(`/login?sent=1&phone=${encodeURIComponent(phone)}&e=${e}`);
+    redirect(`/login?sent=1&e=${e}`);
   }
   redirect("/");
 }

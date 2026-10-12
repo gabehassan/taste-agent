@@ -1,10 +1,12 @@
 import Link from "next/link";
 import { Fade } from "@/components/motion";
 import { onboardingConfig } from "@/lib/onboarding";
+import { loginPhone } from "@/lib/user";
 import { enterExistingCode, exchangeCode, requestLink } from "../user-actions";
 
-export default async function Login({ searchParams }: { searchParams: Promise<{ sent?: string; e?: string; phone?: string }> }) {
-  const { sent, e, phone } = await searchParams;
+export default async function Login({ searchParams }: { searchParams: Promise<{ sent?: string; e?: string }> }) {
+  const { sent, e } = await searchParams;
+  const phone = await loginPhone();
   const config = await onboardingConfig();
   return (
     <main className="min-h-screen flex items-center justify-center p-6">
@@ -16,13 +18,13 @@ export default async function Login({ searchParams }: { searchParams: Promise<{ 
             <form action={exchangeCode} className="flex flex-col gap-3">
               <label htmlFor="code" className="mono u-muted">enter your 6-digit login code</label>
               <p className="text-sm u-muted">use the latest code for {phone}. codes last 10 minutes.</p>
-              <input type="hidden" name="phone" value={phone || ""} />
+              <input type="hidden" name="phone" value={phone} />
               <input id="code" name="code" inputMode="numeric" pattern="[0-9 ]*" maxLength={11} autoComplete="one-time-code" placeholder="000000" required autoFocus className="u-input mono" style={{ fontSize: 22, letterSpacing: ".3em", textAlign: "center", padding: 14 }} aria-describedby={e ? "login-error" : undefined} />
               {e && <div id="login-error" role="alert" className="text-sm u-muted">{e === "slow" ? "too many attempts. wait a bit before trying again." : "that code didn't work. use the latest code or request a new one."}</div>}
               <button className="u-btn">log in</button>
             </form>
             <form action={requestLink} className="mt-4">
-              <input type="hidden" name="phone" value={phone || ""} />
+              <input type="hidden" name="phone" value={phone} />
               <button className="text-sm underline underline-offset-4">request a new code</button>
             </form>
             <p className="text-sm u-muted mt-4">if you’ve already joined, check Messages. {config?.phone && <>you can also text <b>login</b> to <a href={`sms:${config.phone}`} className="underline">{config.phone}</a>. </>}<Link href="/login" className="underline">different number</Link></p>

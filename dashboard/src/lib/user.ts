@@ -21,6 +21,24 @@ export async function setUserKey(key: string) {
   jar.set(COOKIE, key, { httpOnly: true, secure: true, sameSite: "lax", path: "/", maxAge: TTL });
 }
 
+// The number someone is logging in with, kept between the "text me a code" and "enter code" steps.
+const LOGIN_PHONE = "taste_login_phone";
+
+export async function setLoginPhone(phone: string) {
+  const jar = await cookies();
+  jar.set(LOGIN_PHONE, phone, { httpOnly: true, secure: true, sameSite: "lax", path: "/", maxAge: 15 * 60 });
+}
+
+export async function loginPhone(): Promise<string> {
+  const jar = await cookies();
+  return jar.get(LOGIN_PHONE)?.value ?? "";
+}
+
+export async function clearLoginPhone() {
+  const jar = await cookies();
+  jar.delete(LOGIN_PHONE);
+}
+
 export async function clearUserKey() {
   const jar = await cookies();
   jar.delete(COOKIE);

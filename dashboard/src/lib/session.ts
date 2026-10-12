@@ -1,7 +1,7 @@
 import "server-only";
 import { cookies } from "next/headers";
 import { redirect } from "next/navigation";
-import { createHmac, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, timingSafeEqual } from "node:crypto";
 
 const SECRET = process.env.DASHBOARD_SESSION_SECRET!;
 const COOKIE = "taste_admin";
@@ -63,6 +63,7 @@ export function loginAllowed(ip: string) {
 export function passwordOk(pw: string) {
   const want = process.env.DASHBOARD_PASSWORD || "";
   if (!want) return false;
-  const a = Buffer.from(pw), b = Buffer.from(want);
-  return a.length === b.length && timingSafeEqual(a, b);
+  // Compare fixed-length digests so neither the result nor the timing depends on the password length.
+  const digest = (s: string) => createHash("sha256").update(s).digest();
+  return timingSafeEqual(digest(pw), digest(want));
 }

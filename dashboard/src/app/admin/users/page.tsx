@@ -1,17 +1,16 @@
 import InviteForm from "./invite-form";
+import KeyForm from "./key-form";
 import Shell from "@/app/admin/shell";
 import { api, fmtDate, fmtMoney } from "@/lib/api";
 import { requireSession } from "@/lib/session";
-import { addHandle, createKey, createUser, revokeKey, setUserCap, toggleUser } from "@/app/admin/actions";
+import { addHandle, createUser, revokeKey, setUserCap, toggleUser } from "@/app/admin/actions";
 
-export default async function Users({ searchParams }: { searchParams: Promise<{ newkey?: string }> }) {
+export default async function Users() {
   await requireSession();
-  const { newkey } = await searchParams;
   const { users } = await api("/v1/admin/users");
   return (
     <Shell title="users">
       <InviteForm />
-      {newkey && <div className="card mb-6 border-green-800"><div className="muted text-xs uppercase">new key (shown once, copy it now)</div><code className="block mt-1 break-all select-all">{newkey}</code></div>}
       <div className="flex flex-col gap-4 mb-8">
         {users.map((u: any) => (
           <div key={u.id} className="card">
@@ -30,7 +29,7 @@ export default async function Users({ searchParams }: { searchParams: Promise<{ 
               <div>
                 <div className="muted text-xs uppercase mb-1">api keys</div>
                 {(u.keys || []).filter((k: any) => !k.revoked_at).map((k: any) => <div key={k.id} className="flex gap-2 items-center"><code>{k.prefix}…</code><span className="muted text-xs">{k.name} · {k.scopes.join(",")} {k.last_used_at && `· used ${fmtDate(k.last_used_at)}`}</span><form action={revokeKey}><input type="hidden" name="kid" value={k.id} /><button className="danger text-xs px-2 py-0.5">revoke</button></form></div>)}
-                <form action={createKey} className="flex gap-1 mt-2"><input type="hidden" name="uid" value={u.id} /><input name="name" placeholder="name" className="w-24" /><select name="scope"><option value="transport">transport</option><option value="user">user</option><option value="admin">admin</option></select><button className="ghost">new key</button></form>
+                <KeyForm uid={u.id} />
               </div>
               <div className="flex flex-col gap-2">
                 <form action={setUserCap} className="flex gap-1"><input type="hidden" name="uid" value={u.id} /><input name="cap" type="number" step="0.5" min="0" defaultValue={u.settings?.daily_spend_cap_usd ?? 2} className="w-24" /><button className="ghost">set $/day cap</button></form>
