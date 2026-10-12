@@ -4,9 +4,14 @@ import re
 import time
 import uuid
 
-from . import brain, db, media, memory, ratelimit, storage
-from .prompts import copy as C
+from fastapi import HTTPException
+
+from . import blooio, brain, db, login, media, memory, netguard, ratelimit, storage
+from .config import DASHBOARD_URL
+from .connections import sync as sync_connection
 from .fetch import Extracted, canonical, extract
+from .prompts import copy as C
+from .scheduler import due_slot, format_surface, mark_slot_done, next_surface, proactive_candidates, todays_plan
 
 log = logging.getLogger("taste.handlers")
 URL_RE = re.compile(r"https?://[^\s<>\"'\)\]]+")
@@ -15,7 +20,7 @@ REACTION_EMOJI = {"love": "❤️", "like": "👍", "dislike": "👎", "laugh": 
 
 # ---- outbound ---------------------------------------------------------------------
 
-def out(user, text, reply_to=None):
+def out(user, text):
     """Queue a text for the transport. Enforces the per-user outbound cap."""
     limit = int(db.setting("rate_outbound_per_hour"))
     if db.outbound_sends_last_hour(user["id"]) >= limit:
@@ -39,11 +44,11 @@ def react(user, message, reaction):
 
 
 def instant_ack(user, msg, reaction="like"):
-    """Poke feel: tapback the moment a link or photo lands, before any fetching. Blooio only (needs a chat id)."""
+    """Read receipt, tapback and typing bubble the moment a link or photo lands, before any fetching.
+    Blooio only: it needs the provider's chat id."""
     if user.get("transport") != "blooio" or not msg.get("chat_id") or not msg.get("external_id"):
         return
     try:
-        from . import blooio
         blooio.mark_read(msg["chat_id"])
         if reaction:
             blooio.react(msg["chat_id"], msg["external_id"], reaction)
@@ -79,10 +84,6 @@ def update_voice(user, text):
 
 # ---- ingest --------------------------------------------------------------------------
 
-def _bump_profile_counter(user_id):
-    db.set_user_state(user_id, items_since_profile=(db.user_state(user_id).get("items_since_profile") or 0) + 1)
-
-
 def _clean_snippets(snips):
     out = []
     for x in snips or []:
@@ -109,7 +110,6 @@ def ingest_url(user, url, note="", message_id=None, job_id=None):
             ex.meta["media_error"] = m["error"]
     elif ex.thumbnail and ex.kind in ("tweet", "tiktok", "instagram", "youtube"):
         try:
-            from . import netguard
             r = netguard.get(ex.thumbnail, max_bytes=3 * 1024 * 1024, timeout=15)
             ct = r.headers.get("content-type", "image/jpeg").split(";")[0]
             if ct.startswith("image/"):
@@ -127,7 +127,7 @@ def ingest_url(user, url, note="", message_id=None, job_id=None):
     else:
         iid = db.add_item(user["id"], **fields)
         item = db.get_item(user["id"], iid)
-    _bump_profile_counter(user["id"])
+    db.count_new_items(user["id"])
     log.info("user %s saved item %s [%s] %s", user["id"], item["id"], d.kind, d.title)
     return item, d.ack, d.reaction
 
@@ -139,7 +139,7 @@ def ingest_image(user, key, content_type, note="", message_id=None, job_id=None)
     iid = db.add_item(user["id"], url=None, kind=d.kind, source="screenshot", title=d.title, raw_text=d.summary, summary=d.summary,
                       snippets=_clean_snippets(d.snippets), tags=d.tags, why=d.why_saved, read_minutes=d.read_minutes, note=note or None,
                       message_id=message_id, media=[{"key": key, "type": content_type}], meta={"thumbnail_key": key})
-    _bump_profile_counter(user["id"])
+    db.count_new_items(user["id"])
     return db.get_item(user["id"], iid), d.ack, d.reaction
 
 
@@ -159,11 +159,6 @@ CMD = {
     "login": ("login", "log in", "dashboard", "link", "website", "sign in"),
 }
 
-HELP = ("send me links (articles, tweets, reddit, tiktok, youtube, goodreads), screenshots, or just a book title or a "
-        "thought. i read them, keep them, and text you bits back a few times a day.\n\nwords i understand: taste, hit me, "
-        "more, read, status, pause, resume. anything else and we just talk.")
-
-
 def command_for(text):
     t = re.sub(r"[^\w\s?']", "", text.lower()).strip()
     for name, words in CMD.items():
@@ -180,7 +175,6 @@ def do_surface(user, force_kind=None):
 
 
 def next_surface_and_log(user, force_kind=None):
-    from .scheduler import next_surface
     kind, item, text = next_surface(user, force_kind)
     if not text:
         return None, None, None
@@ -191,7 +185,6 @@ def next_surface_and_log(user, force_kind=None):
 
 
 def do_more(user):
-    from .scheduler import format_surface
     last = db.last_surface(user["id"])
     if not last or not last.get("item_id"):
         return do_surface(user)
@@ -218,7 +211,6 @@ def do_profile(user, job_id=None):
 def do_status(user):
     n, unread = db.count_items(user["id"]), db.count_items(user["id"], "unread")
     p = db.latest_profile(user["id"])
-    from .scheduler import todays_plan
     pending = [s["at"][11:16] for s in todays_plan(user)["slots"] if not s["done"]]
     paused = (user.get("settings") or {}).get("paused")
     return out(user, f"{n} saved, {unread} unread. profile built from {p['item_count'] if p else 0} items. "
@@ -226,19 +218,11 @@ def do_status(user):
                      f"spent ${db.spend(user['id'], 1):.2f} today.")
 
 
-WELCOME = ("hey. i'm taste.\n\nsend me anything you want to read, watch, or remember: links, tiktoks, tweets, screenshots, "
-           "a book someone mentioned. i'll read it properly, keep it, and text you the good bits back when you've half forgotten them.\n\n"
-           "over time i learn what you actually like. say 'taste' whenever you want to see what i've figured out.")
-
-
-def do_login_link(user, phone=None):
-    from fastapi import HTTPException
-    from . import login
+def do_login_code(user, phone=None):
     try:
         return login.issue(user, phone)
     except HTTPException:
-        return out(user, "couldn't send another code yet. wait a bit, then text login again.")
-
+        return out(user, C("login_wait"))
 
 
 # ---- inbound dispatcher -----------------------------------------------------------------
@@ -260,14 +244,13 @@ def handle_message(job):
     if urls or images:
         ok, why = db.spend_ok(user)
         if not ok:
-            if not db.user_state(user["id"]).get("cap_notified") == time.strftime("%Y-%m-%d"):
+            if db.user_state(user["id"]).get("cap_notified") != time.strftime("%Y-%m-%d"):
                 out(user, C("spend_cap", why=why))
                 db.set_user_state(user["id"], cap_notified=time.strftime("%Y-%m-%d"))
             for u in urls[:3]:
                 db.add_item(user["id"], url=u, canonical_url=canonical(u), kind="link", title=u, summary="(pending)", status="pending",
                             note=URL_RE.sub("", text).strip() or None, message_id=msg["id"])
             return
-    if urls or images:
         instant_ack(user, msg, "like")
     elif text and not command_for(text):
         instant_ack(user, msg, "")  # read receipt + typing only
@@ -314,7 +297,7 @@ def handle_message(job):
         last = db.last_surface(user["id"])
         if last and last.get("item_id"):
             memory.feedback(user["id"], last["item_id"], "later" if cmd == "later" else "not_for_me")
-            return out(user, "another day, then." if cmd == "later" else "got it. i'll leave that one alone.")
+            return out(user, C("snoozed" if cmd == "later" else "skipped"))
         return out(user, C("nothing_to_mark"))
     if cmd == "read":
         last = db.last_surface(user["id"])
@@ -325,10 +308,10 @@ def handle_message(job):
     if cmd == "status":
         return do_status(user)
     if cmd == "help":
-        return out(user, HELP)
+        return out(user, C("help"))
     if cmd == "login":
         handle = db.q("SELECT address FROM handles WHERE id = %s", (msg.get("handle_id"),), one=True)
-        return do_login_link(user, phone=handle["address"] if handle else None)
+        return do_login_code(user, phone=handle["address"] if handle else None)
     ok, why = db.spend_ok(user)
     if not ok:
         return
@@ -366,7 +349,6 @@ def handle_reaction(user, msg):
 # ---- periodic ------------------------------------------------------------------------------
 
 def surface_tick():
-    from .scheduler import due_slot, mark_slot_done
     for user in db.q("SELECT * FROM users WHERE status = 'active'"):
         try:
             with db.transaction():
@@ -381,8 +363,6 @@ def surface_tick():
 
 
 def do_proactive(user):
-    from .scheduler import proactive_candidates
-    from .config import DASHBOARD_URL
     candidates = proactive_candidates(user)
     if not candidates or not db.spend_ok(user)[0]:
         return None
@@ -446,6 +426,5 @@ def run_job(job):
     if t == "surface":
         return do_surface(db.get_user(job["user_id"]), job["payload"].get("kind"))
     if t == "sync_connection":
-        from .connections import sync
-        return sync(job["payload"]["connection_id"])
+        return sync_connection(job["payload"]["connection_id"])
     raise RuntimeError(f"unknown job type {t}")

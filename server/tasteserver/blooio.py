@@ -147,7 +147,7 @@ def parse_event(evt):
 
 
 def split_bubbles(text, max_parts=3):
-    """Poke-style bursts: split on blank lines into a few short bubbles. Long texts stay whole."""
+    """Paragraphs become separate bubbles, the way people text. Long or link-heavy texts stay whole."""
     parts = [p.strip() for p in re.split(r"\n\s*\n", text) if p.strip()]
     if len(parts) <= 1 or len(parts) > max_parts or any(len(p) > 320 for p in parts) or "http" in text and len(parts) > 2:
         return [text]

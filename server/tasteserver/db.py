@@ -107,6 +107,12 @@ def set_user_state(user_id, **patch):
     q("UPDATE users SET state = COALESCE(state, '{}'::jsonb) || %s WHERE id = %s", (Jsonb(patch), user_id))
 
 
+def count_new_items(user_id, n=1):
+    """New evidence since the last profile build; the worker rebuilds once enough piles up."""
+    q("""UPDATE users SET state = state || jsonb_build_object('items_since_profile',
+             COALESCE((state->>'items_since_profile')::int, 0) + %s) WHERE id = %s""", (n, user_id))
+
+
 # ---- items ------------------------------------------------------------------
 
 def add_item(user_id, **f):

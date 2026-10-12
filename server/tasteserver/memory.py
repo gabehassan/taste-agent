@@ -50,7 +50,7 @@ def feedback(uid, item_id, action):
         else:
             db.update_item(item_id, status="archived", meta={**it["meta"], "not_for_me": True})
         db.q("INSERT INTO item_events(user_id,item_id,kind) VALUES (%s,%s,%s)", (uid, item_id, action))
-        db.q("UPDATE users SET state = state || jsonb_build_object('items_since_profile', COALESCE((state->>'items_since_profile')::int,0) + 1) WHERE id=%s", (uid,))
+        db.count_new_items(uid)
     return {"ok": True}
 
 

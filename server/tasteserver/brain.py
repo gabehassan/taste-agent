@@ -1,15 +1,15 @@
 """All model calls. OpenAI Responses API. Every call records usage; callers check the spend gate first."""
 import json
-import time
 
 from openai import OpenAI
 from pydantic import BaseModel, Field
 
 from . import db, memory
 from .config import MODEL
+from .fetch import lookup_book
 from .media import image_b64
-from .scheduler import _now
 from .prompts import field as F, prompt as PR, style as STYLE, tool as TOOL
+from .scheduler import _now
 
 _client = None
 
@@ -138,13 +138,10 @@ def refresh_profile(user, job_id=None):
 # ---- chat -----------------------------------------------------------------------
 
 TOOLS = [
-    {"type": "function", "name": "remember_preference", "strict": False,
-     "description": "Remember a durable preference explicitly stated by this user in the current message. Never infer from an article, quoted text, or a single save. Prefer updating by forgetting a contradicted memory. Do not store passwords or temporary logistics.",
+    {"type": "function", "name": "remember_preference", "strict": False, "description": TOOL("remember_preference"),
      "parameters": {"type": "object", "properties": {"text": {"type": "string"}}, "required": ["text"]}},
-    {"type": "function", "name": "forget_preference", "strict": False,
-     "description": "Forget an explicit preference when the user asks to remove or correct it. Use its id from preferences.",
+    {"type": "function", "name": "forget_preference", "strict": False, "description": TOOL("forget_preference"),
      "parameters": {"type": "object", "properties": {"id": {"type": "string"}}, "required": ["id"]}},
-
     {"type": "function", "name": "search_items", "strict": False,
      "description": TOOL("search_items"),
      "parameters": {"type": "object", "properties": {"query": {"type": "string"}}, "required": ["query"]}},
@@ -188,7 +185,6 @@ def _run_tool(user, name, inp, source_text=""):
             db.update_item(inp["id"], status=inp["status"])
         return "ok"
     if name == "save_note":
-        from .fetch import lookup_book
         text = inp["text"]; url = None; author = ""; thumb = ""
         if inp["kind"] == "book":
             try:
@@ -200,7 +196,7 @@ def _run_tool(user, name, inp, source_text=""):
         iid = db.add_item(uid, url=url, canonical_url=url, kind=inp["kind"], source="note", title=inp["title"], author=author,
                           raw_text=text, summary=inp["text"], tags=inp.get("tags") or [], snippets=[inp["text"]],
                           meta={"thumbnail": thumb})
-        db.set_user_state(uid, items_since_profile=(db.user_state(uid).get("items_since_profile") or 0) + 1)
+        db.count_new_items(uid)
         return f"saved as item {iid}"
     return "unknown tool"
 
@@ -214,10 +210,6 @@ def _brief(items):
 CHAT_SYSTEM = "\n\n" + PR("chat") + "\n"
 
 
-def _progress_line(user):
-    return "Help them enjoy or use something they kept. No collecting quotas, levels, or pressure to maintain a streak."
-
-
 def chat(user, user_text, job_id=None):
     uid = user["id"]
     profile = db.latest_profile(uid)
@@ -226,8 +218,7 @@ def chat(user, user_text, job_id=None):
                f"<relevant_items>\n{_brief(db.search_items(uid, user_text[:500], limit=5))}\n</relevant_items>\n"
                f"<recent_items>\n{_brief(db.list_items(uid, limit=6))}\n</recent_items>\n"
                f"<last_thing_you_texted_them>\n{json.dumps(db.last_surface(uid), default=str)}\n</last_thing_you_texted_them>\n"
-               f"<now>{time.strftime('%A %Y-%m-%d %H:%M')}</now>\n"
-               f"<relationship>{_progress_line(user)}</relationship>")
+               f"<now>{_now(user):%A %Y-%m-%d %H:%M}</now>")
     inp = [{"role": "user", "content": [{"type": "input_text", "text": context}]}, {"role": "assistant", "content": "got it."}]
     for h in db.recent_chat(uid):
         inp.append({"role": h["role"], "content": h["content"]})

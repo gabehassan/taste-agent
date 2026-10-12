@@ -16,7 +16,7 @@ from fastapi.responses import JSONResponse
 from starlette.concurrency import run_in_threadpool
 from pydantic import BaseModel, Field
 
-from . import auth, blooio, db, login, memory, ratelimit, storage
+from . import auth, blooio, db, login, memory, prompts, ratelimit, storage
 from .auth import Principal, require, target_user
 from .config import DASHBOARD_ORIGIN, DEFAULT_TZ, MAX_ATTACHMENT_BYTES, MAX_ATTACHMENTS, MAX_BODY_BYTES
 from .connections import TYPES as CONNECTION_TYPES
@@ -609,8 +609,7 @@ def _onboard_unknown(ev):
         ev["text"] = text.replace(code, "", 1).strip()
         db.q("UPDATE invites SET used_at = now() WHERE id = %s", (inv["id"],))
     db.audit(None, u["id"], "user.onboard", {"via": "blooio", "invite": bool(inv)})
-    from .handlers import WELCOME
-    db.queue_outbound(u["id"], WELCOME, meta={"chat_id": ev.get("chat_id")})
+    db.queue_outbound(u["id"], prompts.copy("welcome"), meta={"chat_id": ev.get("chat_id")})
     return u
 
 

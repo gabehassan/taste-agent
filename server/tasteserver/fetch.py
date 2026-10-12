@@ -8,6 +8,7 @@ import time
 from dataclasses import dataclass, field
 from urllib.parse import parse_qsl, urlencode, urlparse, urlunparse
 
+import httpx
 import trafilatura
 
 from . import netguard
@@ -130,7 +131,6 @@ def _reddit_auth():
         return None
     if _reddit_token["value"] and time.time() < _reddit_token["exp"] - 60:
         return _reddit_token["value"]
-    import httpx
     r = httpx.post("https://www.reddit.com/api/v1/access_token", auth=(cid, sec), data={"grant_type": "client_credentials"},
                    headers={"User-Agent": "taste-agent/0.2 (personal reading assistant)"}, timeout=20)
     r.raise_for_status()

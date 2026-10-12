@@ -168,7 +168,7 @@ class DatabaseTests(unittest.TestCase):
 
     def test_text_login_binds_phone_and_is_single_use(self):
         u = self.user()
-        handlers.do_login_link(u)
+        handlers.do_login_code(u)
         row = db.q("SELECT * FROM login_challenges", one=True)
         self.assertEqual(row["phone"], PHONE)
         code = re.search(r"\b[0-9]{6}\b", db.q("SELECT text FROM messages", one=True)["text"])[0]

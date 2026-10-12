@@ -2,6 +2,7 @@
 import html
 import logging
 import re
+from urllib.parse import urlparse
 
 import feedparser
 
@@ -26,7 +27,6 @@ def substack_feed(x):
         return f"https://{x}.substack.com/feed"
     if not x.startswith("http"):
         x = "https://" + x
-    from urllib.parse import urlparse
     u = urlparse(x)
     return f"{u.scheme}://{u.netloc}/feed"
 
@@ -40,7 +40,7 @@ def sync(connection_id):
         db.q("UPDATE connections SET last_synced_at = now(), last_error = NULL WHERE id = %s", (c["id"],))
         log.info("connection %s (%s) synced %s new", c["id"], c["type"], n)
         if n:
-            db.set_user_state(c["user_id"], items_since_profile=(db.user_state(c["user_id"]).get("items_since_profile") or 0) + n)
+            db.count_new_items(c["user_id"], n)
     except Exception as e:
         log.exception("sync failed")
         db.q("UPDATE connections SET last_error = %s WHERE id = %s", (str(e)[:500], c["id"]))

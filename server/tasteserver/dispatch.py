@@ -4,7 +4,8 @@ import time
 
 import httpx
 
-from . import blooio, db
+from . import blooio, db, memory
+from .scheduler import _now
 
 log = logging.getLogger("taste.dispatch")
 MAX_ATTEMPTS = 5
@@ -57,8 +58,6 @@ def _claim():
 def _send(m):
     meta = m["meta"] or {}
     if meta.get("proactive"):
-        from . import memory
-        from .scheduler import _now
         user = db.get_user(m["user_id"])
         now = _now(user)
         item = db.get_item(m["user_id"], meta.get("item_id"))
