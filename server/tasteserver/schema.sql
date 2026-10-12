@@ -1,3 +1,4 @@
+-- Applied on every boot by db.migrate(). Every statement is idempotent.
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
 CREATE TABLE IF NOT EXISTS users (
@@ -7,20 +8,26 @@ CREATE TABLE IF NOT EXISTS users (
   role TEXT NOT NULL DEFAULT 'user',
   status TEXT NOT NULL DEFAULT 'active',
   tz TEXT NOT NULL DEFAULT 'UTC',
-  settings JSONB NOT NULL DEFAULT '{}'::jsonb,
-  state JSONB NOT NULL DEFAULT '{}'::jsonb,
+  transport TEXT NOT NULL DEFAULT 'relay',  -- 'blooio' (hosted number) or 'relay' (polls /v1/outbound)
+  settings JSONB NOT NULL DEFAULT '{}'::jsonb,  -- user-tunable overrides of the global settings
+  state JSONB NOT NULL DEFAULT '{}'::jsonb,     -- scheduler plan, voice stats, counters
+  onboarded_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Addresses a user texts from. A transport may only speak for handles registered to its user.
 CREATE TABLE IF NOT EXISTS handles (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   kind TEXT NOT NULL DEFAULT 'imessage',
   address TEXT NOT NULL,
+  capabilities JSONB NOT NULL DEFAULT '[]'::jsonb,  -- react, typing, effects
+  last_seen_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   UNIQUE (kind, address)
 );
 
+-- Only the SHA-256 of each key is stored. Scopes: transport, user, admin.
 CREATE TABLE IF NOT EXISTS api_keys (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID REFERENCES users(id) ON DELETE CASCADE,
@@ -29,25 +36,34 @@ CREATE TABLE IF NOT EXISTS api_keys (
   prefix TEXT NOT NULL,
   scopes TEXT[] NOT NULL,
   last_used_at TIMESTAMPTZ,
+  expires_at TIMESTAMPTZ,
   revoked_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Both directions. Outbound rows are the send queue: queued -> sending -> sent | failed | cancelled.
 CREATE TABLE IF NOT EXISTS messages (
   id BIGSERIAL PRIMARY KEY,
   user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
   direction TEXT NOT NULL,
+  kind TEXT NOT NULL DEFAULT 'text',
   handle_id UUID REFERENCES handles(id),
+  chat_id TEXT,
   text TEXT,
   attachments JSONB NOT NULL DEFAULT '[]'::jsonb,
   external_id TEXT,
   status TEXT NOT NULL DEFAULT 'received',
+  meta JSONB NOT NULL DEFAULT '{}'::jsonb,
+  send_attempts INT NOT NULL DEFAULT 0,
+  send_after TIMESTAMPTZ NOT NULL DEFAULT now(),
+  send_locked_at TIMESTAMPTZ,
   created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
   sent_at TIMESTAMPTZ,
   UNIQUE (user_id, direction, external_id)
 );
 CREATE INDEX IF NOT EXISTS messages_out_queue ON messages(user_id, status) WHERE direction = 'out';
 
+-- The job queue. Workers claim with FOR UPDATE SKIP LOCKED.
 CREATE TABLE IF NOT EXISTS jobs (
   id BIGSERIAL PRIMARY KEY,
   user_id UUID REFERENCES users(id) ON DELETE CASCADE,
@@ -101,6 +117,15 @@ CREATE INDEX IF NOT EXISTS items_user ON items(user_id, id DESC);
 CREATE INDEX IF NOT EXISTS items_tsv ON items USING GIN(tsv);
 CREATE UNIQUE INDEX IF NOT EXISTS items_external ON items(user_id, source, external_id) WHERE external_id IS NOT NULL;
 
+CREATE TABLE IF NOT EXISTS item_events (
+  id BIGSERIAL PRIMARY KEY,
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  item_id BIGINT NOT NULL REFERENCES items(id) ON DELETE CASCADE,
+  kind TEXT NOT NULL,  -- finished, later, not_for_me
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
+);
+CREATE INDEX IF NOT EXISTS item_events_owner ON item_events(user_id, created_at DESC);
+
 CREATE TABLE IF NOT EXISTS profiles (
   id BIGSERIAL PRIMARY KEY,
   user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -111,6 +136,19 @@ CREATE TABLE IF NOT EXISTS profiles (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Things the user explicitly asked it to remember. Capped at 30 per user.
+CREATE TABLE IF NOT EXISTS user_memories (
+  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
+  text TEXT NOT NULL,
+  source TEXT NOT NULL DEFAULT 'user',
+  evidence TEXT,
+  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+  UNIQUE (user_id, text)
+);
+CREATE INDEX IF NOT EXISTS user_memories_owner ON user_memories(user_id, created_at DESC);
+
+-- Snippets and observations texted back to the user.
 CREATE TABLE IF NOT EXISTS surfaces (
   id BIGSERIAL PRIMARY KEY,
   user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -128,6 +166,7 @@ CREATE TABLE IF NOT EXISTS chat_turns (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- One row per model or transcription call, priced at write time. Spend caps sum this table.
 CREATE TABLE IF NOT EXISTS usage (
   id BIGSERIAL PRIMARY KEY,
   user_id UUID REFERENCES users(id) ON DELETE SET NULL,
@@ -144,6 +183,7 @@ CREATE TABLE IF NOT EXISTS usage (
 CREATE INDEX IF NOT EXISTS usage_time ON usage(created_at);
 CREATE INDEX IF NOT EXISTS usage_user_time ON usage(user_id, created_at);
 
+-- Letterboxd, Goodreads, Substack and RSS sources, polled hourly.
 CREATE TABLE IF NOT EXISTS connections (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -156,6 +196,7 @@ CREATE TABLE IF NOT EXISTS connections (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
+-- Fixed-window counters. Old windows are deleted hourly.
 CREATE TABLE IF NOT EXISTS rate_limits (
   key TEXT NOT NULL,
   window_start TIMESTAMPTZ NOT NULL,
@@ -188,30 +229,7 @@ CREATE TABLE IF NOT EXISTS invites (
   created_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 
-ALTER TABLE messages ADD COLUMN IF NOT EXISTS kind TEXT NOT NULL DEFAULT 'text';
-ALTER TABLE messages ADD COLUMN IF NOT EXISTS meta JSONB NOT NULL DEFAULT '{}'::jsonb;
-ALTER TABLE handles ADD COLUMN IF NOT EXISTS capabilities JSONB NOT NULL DEFAULT '[]'::jsonb;
-ALTER TABLE handles ADD COLUMN IF NOT EXISTS last_seen_at TIMESTAMPTZ;
-
-ALTER TABLE users ADD COLUMN IF NOT EXISTS onboarded_at TIMESTAMPTZ;
-ALTER TABLE messages ADD COLUMN IF NOT EXISTS chat_id TEXT;
-CREATE TABLE IF NOT EXISTS login_tokens (
-  token_hash TEXT PRIMARY KEY,
-  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  expires_at TIMESTAMPTZ NOT NULL,
-  used_at TIMESTAMPTZ
-);
-CREATE TABLE IF NOT EXISTS webhook_events (
-  id TEXT PRIMARY KEY,
-  received_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-ALTER TABLE users ADD COLUMN IF NOT EXISTS transport TEXT NOT NULL DEFAULT 'mac';
-ALTER TABLE api_keys ADD COLUMN IF NOT EXISTS expires_at TIMESTAMPTZ;
-ALTER TABLE login_tokens ADD COLUMN IF NOT EXISTS attempts INT NOT NULL DEFAULT 0;
-ALTER TABLE login_tokens ADD COLUMN IF NOT EXISTS phone TEXT;
-
--- Separate challenges allow the same six-digit code to recur without a PK collision.
--- Legacy login_tokens are deliberately not accepted by the new exchange endpoint.
+-- Six-digit login codes, bound to the phone they were sent to. Five guesses each.
 CREATE TABLE IF NOT EXISTS login_challenges (
   id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
   user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
@@ -224,25 +242,8 @@ CREATE TABLE IF NOT EXISTS login_challenges (
 );
 CREATE INDEX IF NOT EXISTS login_challenges_phone ON login_challenges(phone, created_at DESC);
 
-ALTER TABLE messages ADD COLUMN IF NOT EXISTS send_attempts INT NOT NULL DEFAULT 0;
-ALTER TABLE messages ADD COLUMN IF NOT EXISTS send_after TIMESTAMPTZ NOT NULL DEFAULT now();
-ALTER TABLE messages ADD COLUMN IF NOT EXISTS send_locked_at TIMESTAMPTZ;
-
-CREATE TABLE IF NOT EXISTS user_memories (
-  id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  text TEXT NOT NULL,
-  source TEXT NOT NULL DEFAULT 'user',
-  evidence TEXT,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
-  UNIQUE(user_id, text)
+-- Webhook delivery ids already processed, so retries are no-ops.
+CREATE TABLE IF NOT EXISTS webhook_events (
+  id TEXT PRIMARY KEY,
+  received_at TIMESTAMPTZ NOT NULL DEFAULT now()
 );
-CREATE INDEX IF NOT EXISTS user_memories_owner ON user_memories(user_id, created_at DESC);
-CREATE TABLE IF NOT EXISTS item_events (
-  id BIGSERIAL PRIMARY KEY,
-  user_id UUID NOT NULL REFERENCES users(id) ON DELETE CASCADE,
-  item_id BIGINT NOT NULL REFERENCES items(id) ON DELETE CASCADE,
-  kind TEXT NOT NULL,
-  created_at TIMESTAMPTZ NOT NULL DEFAULT now()
-);
-CREATE INDEX IF NOT EXISTS item_events_owner ON item_events(user_id, created_at DESC);

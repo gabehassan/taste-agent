@@ -207,7 +207,7 @@ def transport_hello(body: Hello, p: Principal = Depends(require("transport"))):
 def outbound(request: Request, p: Principal = Depends(require("transport"))):
     _key_rate(p)
     u = target_user(request, p)
-    if u.get("transport") != "mac":
+    if u.get("transport") != "relay":
         return {"messages": []}
     rows = db.q("SELECT id, kind, text, meta, created_at FROM messages WHERE user_id = %s AND direction = 'out' AND status = 'queued' ORDER BY id LIMIT 20", (u["id"],))
     return {"messages": [dict(r) for r in rows]}
@@ -802,7 +802,7 @@ def patch_user(uid: str, body: UserPatch, p: Principal = Depends(require("admin"
     if not u:
         raise HTTPException(404)
     f = {k: v for k, v in body.model_dump().items() if v is not None}
-    for field, allowed in (("transport", ("mac", "blooio")), ("role", ("user", "admin")), ("status", ("active", "disabled"))):
+    for field, allowed in (("transport", ("relay", "blooio")), ("role", ("user", "admin")), ("status", ("active", "disabled"))):
         if field in f and f[field] not in allowed:
             raise HTTPException(400, f"{field} must be one of: {', '.join(allowed)}")
     if "tz" in f:
