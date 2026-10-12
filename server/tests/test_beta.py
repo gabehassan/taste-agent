@@ -24,7 +24,9 @@ from psycopg_pool import ConnectionPool
 from fastapi import HTTPException
 from fastapi.testclient import TestClient
 from pydantic import ValidationError
-from tasteserver import api, blooio, db, dispatch, handlers, login, memory, scheduler, brain
+from tasteserver import api, blooio, brain, db, dispatch, handlers, login, memory, scheduler, storage
+from tasteserver.config import MAX_BODY_BYTES
+from tasteserver.routes import auth as auth_routes, webhooks
 
 PHONE = "+12025550143"
 OTHER = "+12025550144"
@@ -38,7 +40,7 @@ def event(text="hello", sender=PHONE, eid=None, attachments=None):
 class PureTests(unittest.TestCase):
     def test_missing_phone_rejected(self):
         with self.assertRaises(ValidationError):
-            api.AuthExchange(token="123456")
+            auth_routes.AuthExchange(token="123456")
         for value in ["", "abc2025550143", "+1+2025550143", "123"]:
             with self.assertRaises(HTTPException):
                 login.phone_number(value)
@@ -136,7 +138,7 @@ class DatabaseTests(unittest.TestCase):
         script = (pathlib.Path(db.__file__).parent / "schema.sql").read_text().replace("CREATE EXTENSION IF NOT EXISTS pgcrypto;", "")
         with db.conn() as c:
             c.execute(script)
-            for k, v in api.__dict__["db"].DEFAULT_SETTINGS.items():
+            for k, v in db.DEFAULT_SETTINGS.items():
                 c.execute("INSERT INTO settings(key,value) VALUES (%s,%s)", (k, db.J(v)))
 
     @classmethod
@@ -228,7 +230,7 @@ class DatabaseTests(unittest.TestCase):
 
     def test_oversized_bodies_rejected_with_or_without_length(self):
         client = TestClient(api.app)
-        too_big = b"x" * (api.MAX_BODY_BYTES + 1)
+        too_big = b"x" * (MAX_BODY_BYTES + 1)
         self.assertEqual(client.post("/v1/inbound", content=too_big).status_code, 413)
         self.assertEqual(client.post("/v1/inbound", content=iter([too_big[:4_000_000], too_big[4_000_000:]])).status_code, 413)
         self.assertEqual(client.post("/v1/inbound", content=b"{}", headers={"Content-Length": "abc"}).status_code, 413)
@@ -247,7 +249,7 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(bad.status_code, 400)
         svg = base64.b64encode(b"<svg onload=alert(1)>").decode()
         png = base64.b64encode(b"\x89PNG fake").decode()
-        with patch.object(api.storage, "put") as put:
+        with patch.object(storage, "put") as put:
             ok = client.post("/v1/inbound", headers=headers, json={"handle": PHONE, "attachments": [
                 {"content_type": "image/svg+xml", "data_b64": svg}, {"content_type": "image/png", "data_b64": png}]})
         self.assertEqual(ok.status_code, 200)
@@ -276,9 +278,9 @@ class DatabaseTests(unittest.TestCase):
     def test_first_link_and_duplicate_webhook(self):
         db.set_setting("open_signup", True)
         ev = event("https://example.com/article")
-        first = api.process_blooio_event(ev)
+        first = webhooks.process_blooio_event(ev)
         self.assertIn("job_id", first)
-        self.assertTrue(api.process_blooio_event(ev)["duplicate"])
+        self.assertTrue(webhooks.process_blooio_event(ev)["duplicate"])
         self.assertEqual(db.q("SELECT text FROM messages WHERE direction='in'", one=True)["text"], ev["data"]["text"])
         self.assertEqual(len(db.q("SELECT * FROM users")), 1)
         self.assertEqual(len(db.q("SELECT * FROM jobs")), 1)
@@ -286,32 +288,32 @@ class DatabaseTests(unittest.TestCase):
     def test_first_attachment(self):
         db.set_setting("open_signup", True)
         ev = event("", attachments=[{"url": "https://example.com/photo.jpg", "content_type": "image/jpeg"}])
-        with patch.object(api, "_store_remote_attachments", return_value=[{"key": "test/photo.jpg", "content_type":"image/jpeg"}]):
-            api.process_blooio_event(ev)
+        with patch.object(webhooks, "_store_remote_attachments", return_value=[{"key": "test/photo.jpg", "content_type":"image/jpeg"}]):
+            webhooks.process_blooio_event(ev)
         self.assertTrue(db.q("SELECT attachments FROM messages WHERE direction='in'", one=True)["attachments"])
 
     def test_failure_rolls_back_receipt_and_onboarding(self):
         db.set_setting("open_signup", True)
         ev = event("https://example.com/article")
         with patch.object(db, "enqueue", side_effect=RuntimeError("test fault")):
-            with self.assertRaises(RuntimeError): api.process_blooio_event(ev)
+            with self.assertRaises(RuntimeError): webhooks.process_blooio_event(ev)
         self.assertFalse(db.q("SELECT * FROM users"))
         self.assertFalse(db.q("SELECT * FROM webhook_events"))
-        self.assertIn("job_id", api.process_blooio_event(ev))
+        self.assertIn("job_id", webhooks.process_blooio_event(ev))
 
     def test_invite_preserves_attached_link_and_is_single_use(self):
         code = "test_invitation_123456789"
         db.q("INSERT INTO invites(token_hash,expires_at) VALUES (%s,now()+interval '1 day')", (hashlib.sha256(code.encode()).hexdigest(),))
-        api.process_blooio_event(event(code + " https://example.com/article"))
+        webhooks.process_blooio_event(event(code + " https://example.com/article"))
         self.assertEqual(db.q("SELECT text FROM messages WHERE direction='in'", one=True)["text"], "https://example.com/article")
-        self.assertTrue(api.process_blooio_event(event(code, sender=OTHER))["unknown"])
+        self.assertTrue(webhooks.process_blooio_event(event(code, sender=OTHER))["unknown"])
         self.assertEqual(len(db.q("SELECT * FROM users")), 1)
 
     def test_concurrent_new_messages_create_one_account(self):
         db.set_setting("open_signup", True)
         events = [event("one"), event("two")]
         with concurrent.futures.ThreadPoolExecutor(2) as pool:
-            list(pool.map(api.process_blooio_event, events))
+            list(pool.map(webhooks.process_blooio_event, events))
         self.assertEqual(len(db.q("SELECT * FROM users")), 1)
         self.assertEqual(len(db.q("SELECT * FROM jobs")), 2)
 
