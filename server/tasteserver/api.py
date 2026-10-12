@@ -19,7 +19,10 @@ logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(name
 def bootstrap():
     """First boot: create the admin key from ADMIN_BOOTSTRAP_KEY if no keys exist yet."""
     raw = os.environ.get("ADMIN_BOOTSTRAP_KEY", "")
-    if not raw or not raw.startswith("tk_"):
+    if not raw:
+        return
+    if not raw.startswith("tk_") or len(raw) < 40:
+        log.warning("ADMIN_BOOTSTRAP_KEY ignored: it must start with tk_ and be at least 40 characters")
         return
     if db.q("SELECT 1 FROM api_keys LIMIT 1"):
         return
