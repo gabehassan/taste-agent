@@ -189,6 +189,13 @@ class DatabaseTests(unittest.TestCase):
         self.assertEqual(len(db.q("SELECT * FROM users")), 1)
         self.assertFalse(client.get("/v1/public/config").json()["open_signup"])
 
+    def test_oversized_bodies_rejected_with_or_without_length(self):
+        client = TestClient(api.app)
+        too_big = b"x" * (api.MAX_BODY_BYTES + 1)
+        self.assertEqual(client.post("/v1/inbound", content=too_big).status_code, 413)
+        self.assertEqual(client.post("/v1/inbound", content=iter([too_big[:4_000_000], too_big[4_000_000:]])).status_code, 413)
+        self.assertEqual(client.post("/v1/inbound", content=b"{}", headers={"Content-Length": "abc"}).status_code, 413)
+
     def test_first_link_and_duplicate_webhook(self):
         db.set_setting("open_signup", True)
         ev = event("https://example.com/article")
