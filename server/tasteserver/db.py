@@ -280,9 +280,18 @@ def finish_job(job_id, ok, error=None, retry_in=None):
 # ---- usage / spend ----------------------------------------------------------------
 
 
-def record_usage(user_id, kind, model, input_tokens=0, output_tokens=0, cached_tokens=0, seconds=0.0, job_id=None):
+def price_for(model):
+    """Prices for a model. Providers often answer with a dated snapshot ("name-2026-08-01") of the model that was
+    requested, so fall back to the longest configured name it starts with rather than pricing the call at zero."""
     prices = setting("model_prices") or {}
-    p = prices.get(model, {})
+    if model in prices:
+        return prices[model]
+    prefixes = [name for name in prices if model and model.startswith(name + "-")]
+    return prices[max(prefixes, key=len)] if prefixes else {}
+
+
+def record_usage(user_id, kind, model, input_tokens=0, output_tokens=0, cached_tokens=0, seconds=0.0, job_id=None):
+    p = price_for(model)
     cost = 0.0
     if "in" in p:
         cost = (
